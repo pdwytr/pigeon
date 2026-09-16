@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Pigeon's windows: core APIs, the folder opener, and the folder picker.",
+  "windows": [
+    "main",
+    "hover"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-start-dragging",
+    "opener:default",
+    "dialog:allow-open"
+  ]
+}

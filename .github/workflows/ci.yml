@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A second push to the same branch cancels the first: a queue of superseded runs
+# tells you nothing and costs a runner each.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  view:
+    name: view (typecheck, lint, vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # Both tsconfig projects. A bare `tsc --noEmit` checks neither vite.config.ts
+      # nor anything else outside `include`.
+      - run: npm run typecheck
+      - run: npx biome check src
+      - run: npm test
+
+  host:
+    name: host (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Tauri's webview needs system libraries on Linux; the other two ship theirs.
+      - name: Linux webview dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libgtk-3-dev
+
+      # `tauri::generate_context!` embeds frontendDist, so the crate does not compile
+      # without it. The view job proves the real build; this only has to exist.
+      - name: Placeholder frontend bundle
+        shell: bash
+        run: mkdir -p dist && echo '<!doctype html><title>pigeon</title>' > dist/index.html
+
+      # --all-targets is load-bearing: a plain `cargo check` does not compile
+      # #[cfg(test)] code, so the tests would never be type-checked by the gate.
+      - run: cargo check --all-targets --manifest-path src-tauri/Cargo.toml
+      - run: cargo clippy --all-targets --manifest-path src-tauri/Cargo.toml -- -D warnings
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      # Only macOS runs the suite: the real-PTY and real-data tests are written
+      # against this platform, and the others are compile-verified, not exercised.
+      - name: Tests
+        if: matrix.os == 'macos-latest'
+        run: cargo test --manifest-path src-tauri/Cargo.toml

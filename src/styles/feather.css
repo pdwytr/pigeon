@@ -1,0 +1,762 @@
+/* Pigeon's house palette and layout.
+ *
+ * Expanded from `docs/UI/feather-ui.css` plus the per-screen `<style>` blocks in
+ * `docs/UI/01-dashboard.html` and `docs/UI/02-live-hover.html`. The tokens are the mockups'
+ * verbatim values so a screenshot of the app and a screenshot of the mockup are comparable; the
+ * two deliberate departures are marked RESPONSIVE and FOCUS below.
+ */
+
+:root {
+  /* Every surface here is dark, so the engine has to be TOLD that — otherwise WebKit renders its
+   * native UI for a light page: the macOS overlay scrollbar draws a light track that goes solid
+   * white under the pointer, over the dock's #141b27 panel. One declaration fixes the scrollbars,
+   * the form controls and the focus rings together, and it is the reason none of them needs a
+   * per-widget repaint below. */
+  color-scheme: dark;
+
+  --bg: #0c1018;
+  --panel: #141b27;
+  --panel2: #192333;
+  --line: #2b384b;
+  --text: #edf2f7;
+  --muted: #8997aa;
+  --dim: #5d6b7d;
+  --blue: #69a7ff;
+  --green: #49d39c;
+  --amber: #f4bd65;
+  --red: #f27f80;
+  --purple: #b89cff;
+  --shadow: 0 18px 50px #0007;
+
+  --font-sans: "Helvetica Neue", "SF Pro Text", Inter, ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Code", Consolas, monospace;
+
+  /* The terminal's own colours. Read at render time by `console/consoleTheme.ts`, so they belong
+   * in the same token sheet as everything else rather than pinned inside the xterm options. */
+  --term-fg: #c8d3df;
+  --term-bg: #080c12;
+  --term-cursor: #49d39c;
+  --term-cursor-text: #080c12;
+  --term-selection: rgba(105, 167, 255, 0.32);
+  --term-black: #4a5666;
+  --term-red: #f27f80;
+  --term-green: #49d39c;
+  --term-yellow: #f4bd65;
+  --term-blue: #69a7ff;
+  --term-magenta: #b89cff;
+  --term-white: #c8d3df;
+  --term-cyan: #6fd2d6;
+  --term-bright-black: #6d7b8d;
+  --term-bright-red: #ff9b9c;
+  --term-bright-green: #6ee7b8;
+  --term-bright-yellow: #ffd38b;
+  --term-bright-blue: #8fbdff;
+  --term-bright-magenta: #d2bcff;
+  --term-bright-cyan: #8fe3e6;
+  --term-bright-white: #edf2f7;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 var(--font-sans);
+}
+
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+a { color: var(--blue); text-decoration: none; }
+
+/* FOCUS: the mockup is a static picture and has no focus styling at all. Every row here is a real
+ * control reachable by keyboard, so one visible ring is defined once and inherited everywhere. */
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+
+/* ---------------------------------------------------------------- topbar */
+
+.topbar {
+  height: 58px; flex: none;
+  border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: 24px;
+  padding: 0 22px; background: #101722;
+}
+.brand { font-weight: 750; letter-spacing: .08em; font-size: 12px; }
+.brand small { display: block; color: var(--muted); font-weight: 500; letter-spacing: 0; margin-top: -2px; }
+.top-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.icon-btn, .pill-btn {
+  border: 1px solid var(--line); background: var(--panel);
+  border-radius: 7px; padding: 7px 10px; color: var(--muted);
+}
+.icon-btn:hover, .pill-btn:hover { border-color: #58749a; color: var(--text); }
+.icon-btn[disabled], .pill-btn[disabled] { opacity: .55; cursor: default; }
+.pill-btn[aria-pressed="true"] { background: #25334a; color: var(--text); border-color: #3f699c; }
+.spin { display: inline-block; animation: spin 900ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+/* ---------------------------------------------------------------- shell */
+
+/* CONTAINMENT, and it is load-bearing. A grid item defaults to `min-width: auto`, which is its
+ * content's minimum — so a session row whose title, project and time are each `nowrap` makes the
+ * sidebar wider than its own 380px track. Nothing clipped it, so the row's right-hand end painted
+ * OVER the detail pane (status badges floating across the metric cards, each still lined up with
+ * its own row), and the overflow gave the page a horizontal scrollbar, which pushed "Live
+ * projects" off the left edge. Both symptoms, one cause. */
+.content {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 1fr);
+  min-height: calc(100vh - 58px);
+  overflow-x: hidden;
+}
+.sidebar {
+  border-right: 1px solid var(--line);
+  padding: 28px 20px;
+  background: #0d141f;
+  min-width: 0;
+  overflow: hidden;
+}
+.eyebrow { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; }
+.subtle { color: var(--muted); }
+.row { display: flex; align-items: center; gap: 8px; }
+.spread { justify-content: space-between; }
+
+.sidebar-head { display: flex; align-items: end; justify-content: space-between; margin: 7px 0 18px; }
+.sidebar-head .title { font-size: 28px; font-weight: 700; letter-spacing: -.03em; }
+.sidebar-count { color: var(--muted); font-size: 12px; }
+
+/* ---------------------------------------------------------------- scope tabs */
+
+.view-switch {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin-bottom: 20px;
+  background: #111b29; border: 1px solid #182639; border-radius: 9px;
+}
+.view-switch button { padding: 9px 12px; border-radius: 6px; color: var(--muted); font-weight: 700; text-align: left; }
+.view-switch button[aria-selected="true"] { background: #26364e; color: var(--text); box-shadow: 0 1px 2px #0005; }
+.view-switch button small { display: block; margin-top: 1px; color: var(--dim); font-size: 10px; font-weight: 500; }
+.view-switch button[aria-selected="true"] small { color: #a9c6ec; }
+
+.section-label {
+  display: flex; align-items: center; justify-content: space-between; margin: 20px 0 8px;
+  color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .13em; font-weight: 800;
+}
+.section-label:first-of-type { margin-top: 0; }
+.section-label button { font-size: 11px; color: var(--blue); letter-spacing: 0; text-transform: none; font-weight: 600; }
+
+/* ---------------------------------------------------------------- project cards */
+
+.project-stack { display: grid; gap: 8px; }
+.project-card {
+  padding: 13px 13px 11px; border: 1px solid #2c3d54; border-radius: 9px;
+  background: #172231; box-shadow: 0 5px 15px #0002;
+}
+.project-card:hover, .project-card.selected { border-color: #4a73a4; background: #1b2a3e; }
+.project-card.selected { box-shadow: inset 3px 0 var(--blue), 0 5px 15px #0002; }
+.project-top { display: flex; gap: 9px; align-items: flex-start; }
+.project-expand { display: grid; place-items: center; width: 16px; height: 24px; color: var(--muted); font-size: 11px; }
+.project-expand:hover { color: var(--text); }
+.project-expand[aria-expanded="false"] .chevron { transform: rotate(-90deg); }
+.project-icon {
+  width: 25px; height: 25px; display: grid; place-items: center; flex: none;
+  border-radius: 6px; background: #263b58; color: #a6caff; font-size: 13px;
+}
+.project-head { min-width: 0; text-align: left; }
+.project-name { color: var(--red); font-weight: 750; font-size: 14px; letter-spacing: -.01em; }
+.project-path { margin-top: 2px; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.project-status { margin-left: auto; display: flex; align-items: center; gap: 4px; color: var(--green); font-size: 10px; white-space: nowrap; }
+.project-status .dot { width: 6px; height: 6px; background: var(--green); border-radius: 50%; box-shadow: 0 0 0 3px #49d39c18; }
+.project-stats { display: flex; flex-wrap: wrap; gap: 8px; margin: 11px 0 10px 34px; color: #b7c5d5; font-size: 10px; }
+.project-stats strong { color: var(--text); font-weight: 700; }
+.project-actions { display: flex; gap: 6px; margin-left: 34px; }
+.project-actions button {
+  padding: 5px 7px; border: 1px solid #344963; border-radius: 5px;
+  color: var(--muted); font-size: 10px; background: #152033;
+}
+.project-actions button:hover { color: var(--text); border-color: #6486b2; }
+.project-actions .primary { color: #c8ddfa; background: #213b60; border-color: #3f699c; }
+
+.project-session-list { display: grid; gap: 2px; margin: 0 0 10px 34px; padding: 7px 0 1px; border-top: 1px solid #293b52; }
+.project-session {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 5px 6px; border-radius: 4px; text-align: left; color: var(--text); font-size: 10px;
+}
+.project-session:hover { background: #22344c; }
+.project-session[aria-current="true"] { background: #22344c; box-shadow: inset 2px 0 var(--blue); }
+.project-session .session-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.project-session .session-age { color: var(--dim); white-space: nowrap; }
+.project-session .status { font-size: 9px; }
+
+/* ---------------------------------------------------------------- flat session rows */
+
+.session-stack { display: grid; gap: 3px; }
+.session-small {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 8px 9px; border: 1px solid transparent; border-radius: 6px; text-align: left; color: var(--text);
+}
+.session-small:hover, .session-small[aria-current="true"] { background: #172438; border-color: #2e4868; }
+.session-small .session-name { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+/* These two are `nowrap` so a date never wraps mid-word, which also means they never shrink. They
+ * have to be allowed to clip, or they are what pushes the row past its column. */
+.session-small .session-project {
+  color: var(--muted); font-size: 10px; white-space: nowrap;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.session-small .session-time {
+  color: var(--dim); font-size: 10px; white-space: nowrap; flex: none;
+}
+
+.session { display: block; width: 100%; text-align: left; padding: 11px 10px; border: 1px solid transparent; border-radius: 6px; margin: 4px 0; }
+.session:hover { background: var(--panel2); }
+.session[aria-current="true"] { background: #1c2a3d; border-color: #3b5b83; }
+.session-head { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.session-name { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; margin-top: 5px; }
+
+/* ---------------------------------------------------------------- badges */
+
+.engine { font-size: 10px; font-weight: 750; letter-spacing: .05em; padding: 2px 5px; border-radius: 4px; font-style: normal; }
+.engine.small { font-size: 9px; padding: 2px 4px; }
+.engine.claude-code { background: #3b2c20; color: #f3bb86; }
+.engine.codex { background: #203744; color: #8bd1e7; }
+.engine.opencode { background: #302848; color: #c8a9ff; }
+
+.status { font-size: 10px; font-weight: 700; white-space: nowrap; }
+.status.running { color: var(--green); }
+.status.needs_you { color: var(--red); }
+.status.finished { color: var(--amber); }
+.status.unknown, .status.absent { color: var(--muted); }
+.status.terminal-state { color: var(--muted); }
+
+.tag { font-size: 10px; color: var(--muted); border: 1px solid var(--line); padding: 3px 6px; border-radius: 4px; }
+
+/* ---------------------------------------------------------------- detail pane */
+
+.main { padding: 30px 34px; overflow: auto; min-width: 0; }
+.main .eyebrow { margin-bottom: 6px; }
+.detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.detail-head h1 { margin: 0; font-size: 31px; letter-spacing: -.04em; }
+.detail-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.action { border: 1px solid #45678e; background: #1e3a5d; color: #d8e9ff; border-radius: 6px; padding: 8px 11px; font-weight: 700; }
+.action[disabled] { opacity: .5; cursor: default; }
+.stop-session { border: 1px solid #805355; background: #321f26; color: #f2b5b3; border-radius: 6px; padding: 8px 11px; font-weight: 700; }
+.open-project { border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 8px 11px; color: var(--muted); }
+.project-note { margin-top: 6px; color: var(--muted); font-size: 12px; }
+
+.summary-rail {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 18px;
+  background: var(--panel); border: 1px solid var(--line); padding: 10px 14px; border-radius: 8px;
+}
+.summary-rail strong { font-size: 16px; margin-right: 3px; }
+.rail-label { color: var(--muted); font-size: 11px; }
+
+.section { margin-top: 19px; }
+.section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin: 0 0 10px; }
+
+.metric-grid, .kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.metric { border: 1px solid var(--line); border-radius: 7px; padding: 10px; background: #111923; }
+.metric b { display: block; font-size: 17px; }
+.metric span { color: var(--muted); font-size: 10px; }
+.kpi { padding: 10px; border-left: 2px solid var(--blue); background: #182231; }
+.kpi b { display: block; font-size: 15px; }
+.kpi span { font-size: 10px; color: var(--muted); }
+/* An absent KPI is a stated absence, never a zero — so it is dimmed AND spelled with a dash. */
+.kpi.absent { border-left-color: var(--dim); }
+.kpi.absent b { color: var(--dim); }
+
+.pending { color: var(--amber); font-size: 11px; }
+.unavailable { border: 1px solid #704d50; background: #2a1c23; color: #f5b5b0; padding: 10px; border-radius: 6px; font-size: 11px; }
+.notice { padding: 10px 12px; background: #2a2020; border: 1px solid #694344; color: #f6b1b1; border-radius: 7px; }
+.empty-live { padding: 18px 12px; border: 1px dashed #2e4058; border-radius: 8px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.skeleton { height: 58px; border-radius: 8px; background: linear-gradient(90deg, #16202e, #1d2a3c, #16202e); margin: 8px 0; }
+
+/* ---------------------------------------------------------------- capacity */
+
+.accounts {
+  display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+}
+.account { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 18px; padding: 10px 14px; background: var(--panel); }
+.account-identity { min-width: 0; }
+.account-limits { min-width: 0; }
+.account-top { display: flex; justify-content: space-between; align-items: center; }
+.account-name-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.account-name { font-weight: 700; }
+.account-email { font-size: 11px; color: var(--muted); margin: 5px 0 0; }
+.account-providers { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 2px; }
+.meter { height: 5px; background: #293445; border-radius: 5px; overflow: hidden; margin: 6px 0 3px; }
+.meter i { display: block; height: 100%; border-radius: 5px; background: var(--green); }
+.meter.warn i { background: var(--amber); }
+.meter.hot i { background: var(--red); }
+.meter-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }
+
+/* ---------------------------------------------------------------- new project form */
+
+.new-project { padding: 12px; margin-bottom: 10px; border: 1px solid #365276; border-radius: 8px; background: #152236; }
+.new-project label { display: block; color: var(--muted); font-size: 10px; margin-bottom: 5px; }
+.new-project input {
+  width: 100%; padding: 8px; border: 1px solid #38506d; border-radius: 5px;
+  background: #0d1623; color: var(--text); font: 11px/1.4 var(--font-sans);
+}
+.new-project .row { margin-top: 8px; justify-content: flex-end; }
+.form-error { margin-top: 6px; color: #f5b5b0; font-size: 10px; }
+
+.menu-wrap { position: relative; }
+.engine-menu {
+  position: absolute; z-index: 3; margin-top: 4px; padding: 4px; display: grid; gap: 2px;
+  background: #101a29; border: 1px solid #39516f; border-radius: 6px; box-shadow: var(--shadow);
+}
+.engine-menu button { padding: 6px 8px; text-align: left; border-radius: 4px; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.engine-menu button:hover { background: #20334c; color: var(--text); }
+
+/* ---------------------------------------------------------------- terminal */
+
+.terminal-panel { border: 1px solid #263344; border-radius: 8px; background: var(--term-bg); overflow: hidden; }
+.terminal-chrome {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid #263344; background: #0d141f; font-size: 11px; color: var(--muted);
+}
+.terminal-chrome .cwd { font-family: var(--font-mono); font-size: 10px; }
+.terminal-chrome .spacer { margin-left: auto; }
+.terminal-grid { height: 340px; padding: 8px; }
+.terminal-grid .xterm { height: 100%; }
+.terminal-note { padding: 6px 12px; border-bottom: 1px solid #263344; background: #101722; font-size: 11px; color: var(--muted); }
+.terminal-note b { color: var(--text); font-weight: 650; margin-right: 6px; }
+.terminal-note .bad { color: var(--red); }
+
+/* ---------------------------------------------------------------- live hover */
+
+.hover-backdrop { position: fixed; inset: 0; display: flex; justify-content: flex-end; align-items: flex-start; padding: 70px 22px 0; pointer-events: none; z-index: 10; }
+.hover-shell {
+  width: 320px; max-height: 360px; pointer-events: auto; overflow: hidden;
+  display: flex; flex-direction: column; padding: 14px;
+  background: var(--panel); border: 1px solid #40516a; border-top: 3px solid var(--blue);
+  border-radius: 10px; box-shadow: var(--shadow); transition: width .15s;
+}
+.hover-shell .session-list { max-height: 190px; overflow-y: auto; padding-right: 4px; scrollbar-color: #43546a #111923; }
+.hover-shell.compact { width: 260px; max-height: 300px; padding: 11px; }
+.hover-shell.compact .eyebrow { display: none; }
+.hover-shell.compact .summary-rail { margin: 9px 0 6px; }
+.hover-shell.compact .session-meta, .hover-shell.compact footer { display: none; }
+.hover-shell.compact .session-list { max-height: 180px; }
+.hover-skeleton { display: grid; gap: 8px; padding: 4px 0 2px; }
+@media (prefers-reduced-motion: reduce) { .hover-shell { transition: none; } }
+
+/* The hover in ITS OWN WINDOW, which is the only place it is used.
+ *
+ * Everything above is the overlay layout: a fixed backdrop over the dashboard with a 70px top
+ * band, holding a 320x360 card against the top-right corner. Inside the dedicated 340x420
+ * undecorated window that band is dead space at the top of the screen, the card is smaller than
+ * the window it is centred in, and the footer falls off the bottom. Here the surface IS the
+ * window: no backdrop, no inset, no rounding, and the session list takes whatever height is left
+ * after the header, the rail and the footer have taken theirs.
+ *
+ * The compound selector is deliberate — the 980px media query below re-applies the overlay's
+ * padding, and every hover window is narrower than 980px. Specificity settles that, not order. */
+.hover-backdrop.window {
+  position: static; inset: auto; display: block; padding: 0;
+  width: 100%; height: 100vh; pointer-events: auto; z-index: auto;
+}
+.hover-backdrop.window .hover-shell {
+  width: 100%; height: 100%; max-height: none;
+  border-radius: 0; border-left: 0; border-right: 0; border-bottom: 0;
+}
+.hover-backdrop.window .hover-shell.compact { width: 100%; max-height: none; padding: 11px; }
+.hover-backdrop.window .hover-shell .session-list {
+  max-height: none; flex: 1 1 auto; min-height: 0;
+}
+/* The header is a drag region: the pointer moves the window rather than selecting the text in it,
+ * which would otherwise happen on every attempt to move an undecorated window. */
+.hover-backdrop.window [data-tauri-drag-region] { user-select: none; cursor: default; }
+
+/* Demo-style corner plate. The hover window is transparent and this plate is the only visible
+ * surface: a small, angular instrument with Pigeon's live-session list inside it. */
+html:has(.hover-backdrop.window),
+body:has(.hover-backdrop.window) {
+  background: transparent;
+}
+.hover-backdrop.window {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 0;
+}
+.hover-backdrop.window .corner-shell {
+  position: relative;
+  width: 338px;
+  height: 414px;
+  padding: 22px 20px 18px;
+  overflow: hidden;
+  color: #111214;
+  background: #0b0b0c;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  clip-path: polygon(92px 0, 326px 0, 338px 12px, 338px 402px, 326px 414px, 12px 414px, 0 402px, 0 116px);
+  -webkit-app-region: drag;
+}
+.hover-backdrop.window .corner-shell button,
+.hover-backdrop.window .corner-shell .session {
+  -webkit-app-region: no-drag;
+}
+.hover-backdrop.window .corner-shell::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  z-index: 0;
+  background:
+    radial-gradient(#111214 1px, transparent 1.2px) 210px 322px / 7px 7px,
+    repeating-linear-gradient(-45deg, transparent 0 6px, #111214 6px 7.5px) 0 0 / 105px 104px,
+    linear-gradient(158deg, #fbfaf6 0%, #f2f1ea 54%, #e7e6df 100%);
+  clip-path: polygon(90px 0, 324px 0, 336px 12px, 336px 400px, 324px 412px, 12px 412px, 0 400px, 0 114px);
+  pointer-events: none;
+}
+.hover-backdrop.window .corner-shell > * {
+  position: relative;
+  z-index: 1;
+}
+.hover-backdrop.window .corner-shell .row.spread {
+  align-items: flex-start;
+  color: #111214;
+}
+.hover-backdrop.window .corner-shell .eyebrow,
+.hover-backdrop.window .corner-shell .subtle,
+.hover-backdrop.window .corner-shell .rail-label {
+  color: #56565d;
+}
+.hover-backdrop.window .corner-shell strong {
+  color: #111214;
+}
+.hover-backdrop.window .corner-shell .icon-btn {
+  border: 1px solid #111214;
+  border-radius: 0;
+  padding: 4px 7px;
+  color: #111214;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.hover-backdrop.window .corner-shell .icon-btn:hover {
+  color: #f2f1ea;
+  background: #111214;
+  border-color: #111214;
+}
+.hover-backdrop.window .corner-shell .summary-rail {
+  position: relative;
+  z-index: 2;
+  margin: 18px 0 10px !important;
+  padding: 10px 12px !important;
+  color: #f2f1ea;
+  background: #0b0b0c;
+  border: 0;
+  border-radius: 0;
+}
+.hover-backdrop.window .corner-shell .summary-rail strong {
+  color: #f2f1ea;
+  font-family: var(--font-sans);
+  font-size: 22px;
+}
+.hover-backdrop.window .corner-shell .session-list {
+  position: relative;
+  z-index: 2;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  margin: 0 -2px;
+  padding: 5px 4px;
+  background: #0b0b0c;
+  border-top: 1px solid #34343a;
+  border-bottom: 1px solid #34343a;
+  scrollbar-color: #55555d #0b0b0c;
+}
+.hover-backdrop.window .corner-shell .session {
+  margin: 3px 0;
+  padding: 9px 8px;
+  border-radius: 0;
+  color: #ecebe5;
+}
+.hover-backdrop.window .corner-shell .session:hover {
+  background: #202025;
+}
+.hover-backdrop.window .corner-shell .session-name,
+.hover-backdrop.window .corner-shell .session-meta {
+  color: inherit;
+}
+.hover-backdrop.window .corner-shell .session-meta {
+  color: #8d8d97;
+}
+.hover-backdrop.window .corner-shell footer {
+  color: #56565d;
+}
+.hover-backdrop.window .corner-shell.compact {
+  width: 338px;
+  height: 226px;
+  padding: 18px 20px;
+}
+.hover-backdrop.window .corner-shell.compact .session-list {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- responsive
+ * RESPONSIVE: the mockup sets `.sidebar{display:none}` below 850px, which does not clip the
+ * sidebar so much as delete it — on a narrow window there would be no way to pick a project at
+ * all. Pigeon stacks instead, which is what the brief asks for. */
+
+@media (max-width: 980px) {
+  .content { grid-template-columns: 1fr; }
+  .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
+  .main { padding: 24px 18px; }
+  .detail-head { display: block; }
+  .detail-actions { margin-top: 15px; }
+  .metric-grid, .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .accounts { grid-template-columns: 1fr; }
+  .account { grid-template-columns: 1fr; border-right: 0; border-bottom: 1px solid var(--line); }
+  .hover-backdrop { padding: 70px 12px 0; justify-content: center; }
+}
+@media (max-width: 560px) {
+  .metric-grid, .kpi-grid { grid-template-columns: 1fr; }
+  .project-stats, .project-actions, .project-session-list { margin-left: 0; }
+}
+
+/* Visually hidden but still announced. Used where a glyph carries a meaning a screen reader
+ * cannot infer — the em dash of an absent measurement being the whole reason this exists. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Session stacks are real <ul>s — a screen reader should be able to say how many sessions there
+ * are — so the list chrome is removed and the li is a plain block around one full-width control. */
+.session-stack,
+.project-session-list,
+.hover-shell .session-list {
+  list-style: none;
+  margin-block: 0;
+  padding-inline: 0;
+}
+.session-stack > li,
+.project-session-list > li,
+.hover-shell .session-list > li { display: block; }
+.project-session-list { margin: 0 0 10px 34px; padding: 7px 0 1px; }
+
+/* ---------------------------------------------------------------- live dock */
+html:has(.dock-stage),
+body:has(.dock-stage),
+.dock-stage {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+   background: #4a151f;
+}
+.dock-stage {
+  position: relative;
+  padding: 14px;
+  overflow: hidden;
+  scrollbar-color: var(--line) var(--panel);
+}
+.dock-stage .rig {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+.dock-content { width: 100%; height: 100%; display: flex; flex-direction: column; }
+.limits-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin-top: 14px;
+  padding: 0 10px;
+  background: #351018;
+  border: 1px solid #050609;
+  border-radius: 8px;
+  overflow: auto;
+}
+.limits-panel .section { margin-top: 0; }
+.limits-panel .section > h3 { margin: 12px 0 8px; }
+.limits-panel .accounts { border: 0; border-radius: 0; background: transparent; gap: 8px; overflow: visible; }
+.limits-panel .account {
+  display: block;
+  padding: 8px 10px;
+  background: #5a1b28;
+  border: 1px solid #050609;
+  border-radius: 6px;
+}
+.limits-panel .account-top { display: block; }
+.limits-panel .account-top .tag { display: none; }
+.limits-panel .account-email { margin: 3px 0 6px; }
+.limits-panel .meter-label { gap: 8px; }
+.limits-panel .meter-label span:last-child { text-align: right; }
+.plate-header { display: flex; align-items: center; }
+.plate-header {
+  justify-content: flex-start;
+  gap: 12px;
+  flex: none;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #050609;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: .18em;
+  cursor: grab;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+/* `.dragging` is set by LiveDock for the whole native drag; `:active` covers the press before it
+ * starts. Both are needed — neither spans the gesture on its own. */
+.plate-header:active,
+.plate-header.dragging { cursor: grabbing; }
+.plate-header > span { cursor: grab; }
+.plate-header:active > span,
+.plate-header.dragging > span { cursor: grabbing; }
+.plate-header button {
+  pointer-events: auto;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.plate-header button { align-self: center; }
+.plate-close {
+  border: 1px solid #050609;
+  color: #f2c9cf;
+  background: #641f2c;
+  font: 10px var(--font-mono);
+  letter-spacing: 1px;
+  padding: 5px 7px;
+}
+.plate-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+}
+.plate-close:hover { color: var(--text); background: #762738; }
+.limits-toggle {
+  padding: 5px 8px;
+  border: 1px solid #050609;
+  color: #f2c9cf;
+  background: #641f2c;
+  font: 10px var(--font-mono);
+  letter-spacing: .12em;
+}
+.limits-toggle:hover, .limits-toggle[aria-expanded="true"] { color: var(--text); background: #762738; }
+.plate-header .limits-toggle { margin-left: auto; }
+.dock-status { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.dock-open-label, .dock-running-count { font-size: 11px; font-weight: 750; line-height: 1; letter-spacing: 0; text-transform: none; }
+.dock-open-label strong { color: var(--blue); font-size: inherit; font-weight: inherit; }
+.dock-running-count { color: var(--green); }
+.dock-stage .dock-wing {
+   flex: 1 1 auto;
+   min-height: 0;
+   margin-top: 14px;
+   color: var(--text);
+   background: #351018;
+   border: 1px solid #050609;
+   border-radius: 8px;
+   overflow: auto;
+}
+.dock-wing-sessions {
+  width: 100%;
+  min-height: 0;
+  padding: 12px;
+}
+.dock-stage .dock-roster {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 0;
+  max-height: none;
+  overflow: visible;
+  scrollbar-color: var(--line) var(--panel);
+}
+.dock-roster-row {
+  margin-bottom: 8px;
+  padding: 0 10px;
+  background: #5a1b28;
+  border: 1px solid #050609;
+  border-radius: 6px;
+}
+.dock-roster-row:last-child { margin-bottom: 0; }
+.dock-session { padding: 8px 0; }
+.dock-session-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dock-session-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  /* 12px, not the 13px the main window's rows use: this line is one ellipsised string in a 340px
+   * window, so the step down buys roughly three more characters before the truncation and keeps
+   * the row's own hierarchy — title, then meta at 10px — intact. */
+  font: 650 12px var(--font-sans);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dock-session-meta {
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The project name shares one ellipsised line with the session title, so it has to be legible on
+ * the row AND separable from the title beside it. Two carriers, because §7.5 forbids colour being
+ * the only one:
+ *   colour  #ff9aa8 — 6.44:1 on the row's #5a1b28, and saturated enough to read as clearly not the
+ *           title's near-white #edf2f7. The earlier #ffd9de measured 10.01:1 but sat so close to
+ *           that near-white that the two ran together.
+ *   weight  900 against the title's 650.
+ * Nothing DARK is available here: the ground is already dark, so legible means lighter — black
+ * measured 1.62:1 and could not be rescued by any shade. */
+.dock-project-name { color: #ff9aa8; font-weight: 900; }
+/* Scoped to the dock, not to `.engine` itself: the same badge carries the main window's session
+ * list and project cards, where it is read at a normal distance. In a 340px window the session
+ * title is the thing being read and the engine is a secondary cue, so it takes the step down the
+ * packed project rows already define rather than introducing a third badge size. */
+.dock-stage .engine { font-size: 9px; padding: 2px 4px; }
+.dock-stage .status { font-size: 10px; }
+.dock-stage .status.finished { color: var(--amber); }
+.dock-message { color: var(--muted); font-size: 11px; line-height: 1.4; }
+/* The one owner decision the app asks for. An offer, so it sits above the roster without displacing
+ * it or stealing focus; the buttons are ordinary controls and reachable by Tab. */
+.dock-hook-prompt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  color: var(--text);
+  background: #351018;
+  border: 1px solid #050609;
+  border-radius: 6px;
+  font-size: 10px;
+}
+.dock-hook-prompt > span { flex: 1 1 auto; min-width: 0; }
+.dock-hook-prompt button {
+  flex: none;
+  padding: 4px 8px;
+  color: var(--text);
+  background: #641f2c;
+  border: 1px solid #050609;
+  border-radius: 4px;
+  font-size: 10px;
+}
+.dock-hook-prompt button:hover { background: #762738; }
+.dock-loading { display: grid; gap: 8px; padding-top: 12px; }
+.dock-loading span { display: block; height: 8px; background: var(--line); }

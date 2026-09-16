@@ -1,0 +1,13 @@
+{
+  "five_hour": null,
+  "seven_day": {
+    "utilization": 37.5,
+    "resets_at": "2026-09-19T05:00:00Z",
+    "severity": "normal",
+    "overage_status": "not_eligible"
+  },
+  "seven_day_opus": null,
+  "seven_day_oauth_apps": null,
+  "account_uuid": "316b0000-0000-0000-0000-000000000000",
+  "organization_uuid": "848c0000-0000-0000-0000-000000000000"
+}
