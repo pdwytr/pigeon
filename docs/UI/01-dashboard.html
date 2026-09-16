@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pigeon · Projects first</title>
+  <link rel="stylesheet" href="feather-ui.css">
+  <style>
+    .content{grid-template-columns:380px 1fr}
+    .sidebar{padding:28px 20px;background:#0d141f}
+    .sidebar-head{display:flex;align-items:end;justify-content:space-between;margin:7px 0 18px}
+    .sidebar-head .title{font-size:28px;letter-spacing:-.03em}
+    .sidebar-count{color:var(--muted);font-size:12px}
+    .view-switch{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:4px;margin-bottom:20px;background:#111b29;border:1px solid #182639;border-radius:9px}
+    .view-switch button{padding:9px 12px;border-radius:6px;color:var(--muted);font-weight:700;text-align:left}
+    .view-switch button.active{background:#26364e;color:var(--text);box-shadow:0 1px 2px #0005}
+    .view-switch button small{display:block;margin-top:1px;color:var(--dim);font-size:10px;font-weight:500}
+    .view-switch button.active small{color:#a9c6ec}
+    .section-label{display:flex;align-items:center;justify-content:space-between;margin:20px 0 8px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.13em;font-weight:800}
+    .section-label:first-of-type{margin-top:0}
+    .section-label button{font-size:11px;color:var(--blue);letter-spacing:0;text-transform:none;font-weight:600}
+    .project-stack{display:grid;gap:8px}
+    .project-card{padding:13px 13px 11px;border:1px solid #2c3d54;border-radius:9px;background:#172231;box-shadow:0 5px 15px #0002}
+    .project-card:hover,.project-card.selected{border-color:#4a73a4;background:#1b2a3e}
+    .project-card.selected{box-shadow:inset 3px 0 var(--blue),0 5px 15px #0002}
+    .project-top{display:flex;gap:9px;align-items:flex-start}
+    .project-expand{display:grid;place-items:center;width:16px;height:24px;color:var(--muted);font-size:11px}
+    .project-expand:hover{color:var(--text)}
+    .project-expand[aria-expanded="false"] .chevron{transform:rotate(-90deg)}
+    .project-icon{width:25px;height:25px;display:grid;place-items:center;border-radius:6px;background:#263b58;color:#a6caff;font-size:13px}
+    .project-name{font-weight:750;font-size:14px;letter-spacing:-.01em}
+    .project-path{margin-top:2px;color:var(--muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .project-status{margin-left:auto;display:flex;align-items:center;gap:4px;color:var(--green);font-size:10px;white-space:nowrap}
+    .project-status .dot{width:6px;height:6px;background:var(--green);border-radius:50%;box-shadow:0 0 0 3px #49d39c18}
+    .project-stats{display:flex;gap:8px;margin:11px 0 10px 34px;color:#b7c5d5;font-size:10px}
+    .project-stats strong{color:var(--text);font-weight:700}
+    .project-actions{display:flex;gap:6px;margin-left:34px}
+    .project-actions button{padding:5px 7px;border:1px solid #344963;border-radius:5px;color:var(--muted);font-size:10px;background:#152033}
+    .project-actions button:hover{color:var(--text);border-color:#6486b2}
+    .project-actions .primary{color:#c8ddfa;background:#213b60;border-color:#3f699c}
+    .project-session-list{display:grid;gap:2px;margin:0 0 10px 34px;padding:7px 0 1px;border-top:1px solid #293b52}
+    .project-session-list.collapsed{display:none}
+    .project-session{display:flex;align-items:center;gap:6px;width:100%;padding:5px 6px;border-radius:4px;text-align:left;color:var(--text);font-size:10px}
+    .project-session:hover{background:#22344c}
+    .project-session .session-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .project-session .session-age{color:var(--dim);white-space:nowrap}
+    .project-session .status{font-size:9px}
+    .project-session.all-session{display:none}
+    .project-session.all-session.visible{display:flex}
+    .project-card.hidden,.session-small.hidden{display:none}
+    .session-stack{display:grid;gap:3px}
+    .session-small{display:flex;align-items:center;gap:7px;width:100%;padding:8px 9px;border:1px solid transparent;border-radius:6px;text-align:left;color:var(--text)}
+    .session-small:hover,.session-small.selected{background:#172438;border-color:#2e4868}
+    .session-small .session-name{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px}
+    .session-small .session-project{color:var(--muted);font-size:10px;white-space:nowrap}
+    .session-small .session-time{color:var(--dim);font-size:10px;white-space:nowrap}
+    .engine{font-size:9px!important;padding:2px 4px!important}
+    .empty-live{padding:18px 12px;border:1px dashed #2e4058;border-radius:8px;color:var(--muted);font-size:11px;line-height:1.5}
+    .new-project{display:none;padding:12px;margin-bottom:10px;border:1px solid #365276;border-radius:8px;background:#152236}
+    .new-project.open{display:block}
+    .new-project label{display:block;color:var(--muted);font-size:10px;margin-bottom:5px}
+    .new-project input{width:100%;padding:8px;border:1px solid #38506d;border-radius:5px;background:#0d1623;color:var(--text);font:11px inherit}
+    .new-project .row{margin-top:8px;justify-content:flex-end}
+    .engine-menu{display:none;position:absolute;z-index:3;margin-top:4px;padding:4px;background:#101a29;border:1px solid #39516f;border-radius:6px;box-shadow:var(--shadow)}
+    .engine-menu.open{display:grid;gap:2px}
+    .engine-menu button{padding:6px 8px;text-align:left;border-radius:4px;color:var(--muted);font-size:10px}
+    .engine-menu button:hover{background:#20334c;color:var(--text)}
+    .menu-wrap{position:relative}
+    .main{padding:30px 34px;overflow:auto}
+    .main .eyebrow{margin-bottom:6px}
+    .detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
+    .detail-head h1{margin:0;font-size:31px;letter-spacing:-.04em}
+    .detail-head .subtle{margin-top:5px}
+    .detail-actions{display:flex;gap:8px}
+    .action{border:1px solid #45678e!important;background:#1e3a5d!important;color:#d8e9ff!important;border-radius:6px;padding:8px 11px!important;font-weight:700}
+    .stop-session{border:1px solid #805355!important;background:#321f26!important;color:#f2b5b3!important;border-radius:6px;padding:8px 11px!important;font-weight:700}
+    .open-project{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:8px 11px;color:var(--muted)}
+    .project-note{margin-top:6px;color:var(--muted);font-size:12px}
+    .unavailable{border:1px solid #704d50;background:#2a1c23;color:#f5b5b0;padding:10px;border-radius:6px;font-size:11px}
+    @media(max-width:850px){.content{grid-template-columns:330px 1fr}.main{padding:24px}.detail-head{display:block}.detail-actions{margin-top:15px}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">FEATHER<small>agent session monitor</small></div>
+      <div class="top-actions"><span class="subtle">Updated 10:42:18</span><button class="icon-btn" aria-label="Refresh data">↻</button><button class="pill-btn">Show hover</button></div>
+    </header>
+
+    <div class="content">
+      <aside class="sidebar" aria-label="Projects and sessions">
+        <div class="eyebrow">Workspace · recent activity</div>
+        <div class="sidebar-head"><div class="title">Projects</div><span class="sidebar-count">4 live</span></div>
+
+        <div class="view-switch" role="tablist" aria-label="Session scope">
+          <button class="active" data-view="live" role="tab" aria-selected="true">Live<small>active projects + sessions</small></button>
+          <button data-view="recent" role="tab" aria-selected="false">Recent<small>projects and sessions · 7 days</small></button>
+        </div>
+
+        <div class="new-project" id="new-project-form">
+          <label for="project-path">New project folder</label>
+          <input id="project-path" value="/Users/khalid/Documents/Projects/" aria-label="New project folder path">
+          <div class="row"><button class="icon-btn" id="cancel-project">Cancel</button><button class="action" id="create-project">Open project</button></div>
+        </div>
+
+        <div class="section-label"><span>Live projects</span><button id="new-project">+ New project</button></div>
+        <div class="project-stack" id="live-projects">
+          <article class="project-card selected" data-project="demo-studio">
+            <div class="project-top"><button class="project-expand" aria-expanded="true" aria-label="Show demo-studio sessions"><span class="chevron">▾</span></button><div class="project-icon">⌘</div><div><div class="project-name">demo-studio</div><div class="project-path">~/Documents/Projects/demo-studio</div></div><span class="project-status"><i class="dot"></i>2 live</span></div>
+            <div class="project-stats"><span><strong>2</strong> live</span><span>·</span><span><strong>15.1M</strong> tokens</span><span>·</span><span><strong>3</strong> sessions</span></div>
+            <div class="project-session-list">
+              <button class="project-session" data-recent="true" data-session="feather-ui"><i class="engine claude">C</i><span class="session-label">Pigeon UI</span><span class="status running">● running</span><span class="session-age">now</span></button>
+              <button class="project-session" data-recent="true" data-session="fix-tests"><i class="engine codex">C</i><span class="session-label">Fix test suite</span><span class="status needs">● needs you</span><span class="session-age">4m</span></button>
+              <button class="project-session all-session" data-recent="true" data-session="untitled"><i class="engine claude">C</i><span class="session-label">Untitled session</span><span class="status">—</span><span class="session-age">1h</span></button>
+            </div>
+            <div class="project-actions"><button class="primary project-open">Open project</button><span class="menu-wrap"><button class="add-session">+ Add session</button><span class="engine-menu"><button data-engine="Claude">Open in Claude</button><button data-engine="Codex">Open in Codex</button><button data-engine="OpenCode">Open in OpenCode</button></span></span></div>
+          </article>
+          <article class="project-card" data-project="pigeon">
+            <div class="project-top"><button class="project-expand" aria-expanded="true" aria-label="Show pigeon sessions"><span class="chevron">▾</span></button><div class="project-icon">⌘</div><div><div class="project-name">pigeon</div><div class="project-path">~/Documents/Projects/feather</div></div><span class="project-status"><i class="dot"></i>1 live</span></div>
+            <div class="project-stats"><span><strong>1</strong> live</span><span>·</span><span><strong>1.8M</strong> tokens</span><span>·</span><span><strong>5</strong> sessions</span></div>
+            <div class="project-session-list">
+              <button class="project-session" data-recent="true" data-session="api-adapter"><i class="engine opencode">O</i><span class="session-label">API adapter</span><span class="status finished">● finished</span><span class="session-age">18m</span></button>
+              <button class="project-session all-session" data-recent="true" data-session="docs-cleanup"><i class="engine codex">C</i><span class="session-label">Docs cleanup</span><span class="status">—</span><span class="session-age">2h</span></button>
+              <button class="project-session all-session" data-recent="true" data-session="console-polish"><i class="engine claude">C</i><span class="session-label">Console polish</span><span class="status">—</span><span class="session-age">yesterday</span></button>
+            </div>
+            <div class="project-actions"><button class="primary project-open">Open project</button><span class="menu-wrap"><button class="add-session">+ Add session</button><span class="engine-menu"><button data-engine="Claude">Open in Claude</button><button data-engine="Codex">Open in Codex</button><button data-engine="OpenCode">Open in OpenCode</button></span></span></div>
+          </article>
+        </div>
+
+        <div class="section-label all-only"><span>Sessions</span><span>7-day window</span></div>
+        <div class="session-stack all-only" id="all-sessions">
+          <button class="session-small selected" data-recent="true" data-session="feather-ui"><i class="engine claude">CLAUDE</i><span class="session-name">Pigeon UI</span><span class="session-project">demo-studio</span><span class="session-time">now</span></button>
+          <button class="session-small" data-recent="true" data-session="fix-tests"><i class="engine codex">CODEX</i><span class="session-name">Fix test suite</span><span class="session-project">demo-studio</span><span class="session-time">4m</span></button>
+          <button class="session-small" data-recent="true" data-session="api-adapter"><i class="engine opencode">OPENCODE</i><span class="session-name">API adapter</span><span class="session-project">pigeon</span><span class="session-time">18m</span></button>
+          <button class="session-small" data-recent="true" data-session="untitled"><i class="engine claude">CLAUDE</i><span class="session-name">Untitled session</span><span class="session-project">demo-studio</span><span class="session-time">1h</span></button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="eyebrow">Project metrics · live activity</div>
+        <div class="detail-head"><div><h1>demo-studio</h1><div class="project-note">~/Documents/Projects/demo-studio · 3 sessions · 2 live</div></div><div class="detail-actions"><button class="open-project">Open folder</button><span class="menu-wrap"><button class="action add-session">+ Add session</button><span class="engine-menu"><button data-engine="Claude">Open in Claude</button><button data-engine="Codex">Open in Codex</button><button data-engine="OpenCode">Open in OpenCode</button></span></span></div></div>
+        <div class="summary-rail" style="margin:22px 0 0"><span><strong class="running">2</strong><span class="rail-label">running</span></span><span><strong class="needs">1</strong><span class="rail-label">needs you</span></span><span><strong class="finished">1</strong><span class="rail-label">finished</span></span><span><strong>15.1M</strong><span class="rail-label">tokens</span></span></div>
+        <section class="section" style="margin-top:14px"><div class="row" style="justify-content:space-between"><h3>Live sessions</h3><span class="subtle">2 sessions in this project</span></div><div class="session-list"><button class="session selected"><div class="session-head"><span class="session-name"><i class="engine claude">CLAUDE</i> Pigeon UI</span><span class="status running">● running</span></div><div class="session-meta">84 calls · 61 tools · 1.2M tokens · just now</div></button><button class="session"><div class="session-head"><span class="session-name"><i class="engine codex">CODEX</i> Fix test suite</span><span class="status needs">● needs you</span></div><div class="session-meta">31 calls · 22 tools · 420K tokens · 4m in state</div></button></div></section>
+        <section class="section"><h3>Project usefulness</h3><div class="kpi-grid"><div class="kpi"><span>Context / call</span><b>112K</b></div><div class="kpi"><span>Rewrite ratio</span><b>0.09</b></div><div class="kpi"><span>Batching ratio</span><b>0.73</b></div></div></section>
+        <section class="section"><h3>Metrics coverage</h3><div class="unavailable">Metrics unavailable · OpenCode database was busy; retrying</div></section>
+        <section class="section"><h3>Session actions</h3><p class="subtle">Select a live session above to see its metrics and resume it in the right pane. Adding a session opens the selected engine in this project folder.</p></section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const liveProjects = document.getElementById('live-projects');
+      const allSessions = document.getElementById('all-sessions');
+      const allOnly = document.querySelectorAll('.all-only');
+      const tabs = document.querySelectorAll('[data-view]');
+      function setView(view) {
+        tabs.forEach(tab => {
+          const active = tab.dataset.view === view;
+          tab.classList.toggle('active', active);
+          tab.setAttribute('aria-selected', String(active));
+        });
+        allOnly.forEach(el => el.style.display = view === 'recent' ? (el.classList.contains('section-label') ? 'flex' : 'grid') : 'none');
+        document.querySelectorAll('.all-session').forEach(session => session.classList.toggle('visible', view === 'recent'));
+        document.querySelectorAll('.project-card').forEach(card => {
+          const rows = [...card.querySelectorAll('.project-session')];
+          const hasRecent = rows.some(row => row.dataset.recent !== 'false');
+          const hasLive = rows.some(row => !row.classList.contains('all-session'));
+          card.classList.toggle('hidden', view === 'recent' ? !hasRecent : !hasLive);
+        });
+        document.querySelectorAll('#all-sessions .session-small').forEach(session => session.classList.toggle('hidden', view === 'recent' && session.dataset.recent === 'false'));
+        liveProjects.previousElementSibling.querySelector('span').textContent = view === 'live' ? 'Live projects' : 'Projects';
+      }
+      tabs.forEach(tab => tab.addEventListener('click', () => setView(tab.dataset.view)));
+      const sessionDetails = {
+        'feather-ui': {name: 'Pigeon UI', engine: 'CLAUDE', project: 'demo-studio', state: 'running', stateClass: 'running', age: 'just now', tokens: '1.2M', calls: '84', tools: '61', context: '112K', rewrite: '0.09', batching: '0.73'},
+        'fix-tests': {name: 'Fix test suite', engine: 'CODEX', project: 'demo-studio', state: 'needs you', stateClass: 'needs', age: '4m in state', tokens: '420K', calls: '31', tools: '22', context: '100K', rewrite: '0.08', batching: '0.71'},
+        'api-adapter': {name: 'API adapter', engine: 'OPENCODE', project: 'pigeon', state: 'finished', stateClass: 'finished', age: '18m in state', tokens: '88K', calls: '12', tools: '19', context: '42K', rewrite: '0.04', batching: '1.58'},
+        'untitled': {name: 'Untitled session', engine: 'CLAUDE', project: 'demo-studio', state: 'no status', stateClass: 'unknown', age: '1h ago', tokens: '64K', calls: '9', tools: '4', context: '18K', rewrite: '0.02', batching: '0.44'},
+        'docs-cleanup': {name: 'Docs cleanup', engine: 'CODEX', project: 'pigeon', state: 'no status', stateClass: 'unknown', age: '2h ago', tokens: '210K', calls: '18', tools: '12', context: '54K', rewrite: '0.11', batching: '0.67'},
+        'console-polish': {name: 'Console polish', engine: 'CLAUDE', project: 'pigeon', state: 'no status', stateClass: 'unknown', age: 'yesterday', tokens: '390K', calls: '27', tools: '31', context: '71K', rewrite: '0.13', batching: '1.15'}
+      };
+      let activeSessionId = null;
+      const activeTerminals = new Set();
+      function renderTerminal(id) {
+        const session = sessionDetails[id];
+        if (!session || document.querySelector('.inline-terminal')) return;
+        const terminal = document.createElement('section');
+        terminal.className = 'section inline-terminal';
+        terminal.innerHTML = '<div class="row" style="justify-content:space-between;margin-bottom:10px"><h3 style="margin:0">Embedded terminal</h3><span class="status running">● process running</span></div><div class="terminal"><div>' + session.engine + ' CLI</div><div>Resuming “' + session.name + '” in its original project directory</div><div>Working directory: ~/Documents/Projects/' + session.project + '</div><br><div><span class="prompt">›</span> Continue from this session</div><div>  scrollback restored · continuing live output…</div><br><div><span class="prompt">›</span> <span style="border-right:7px solid var(--text)"> </span></div></div><div class="row" style="margin-top:10px"><span class="subtle">PTY ready · scrollback retained while Pigeon is open</span><span class="subtle">same session metrics remain above</span></div>';
+        document.querySelector('.main').appendChild(terminal);
+      }
+      function showSession(id) {
+        const session = sessionDetails[id];
+        if (!session) return;
+        document.querySelector('.inline-terminal')?.remove();
+        activeSessionId = id;
+        const main = document.querySelector('.main');
+        main.querySelector('.eyebrow').textContent = 'Session metrics · ' + session.state;
+        main.querySelector('h1').textContent = session.name;
+        main.querySelector('.project-note').textContent = session.project + ' · ' + session.engine.toLowerCase() + ' · ' + session.age;
+        const stop = session.state === 'no status' ? '' : '<button class="stop-session">Stop session</button>';
+        const terminalAction = activeTerminals.has(id) ? 'Close terminal' : 'Resume in terminal';
+        main.querySelector('.detail-actions').innerHTML = '<button class="open-project">Open folder</button>' + stop + '<button class="action">' + terminalAction + '</button>';
+        main.querySelector('.summary-rail').innerHTML = '<span><strong class="' + session.stateClass + '">' + session.state + '</strong><span class="rail-label">status</span></span><span><strong>' + session.tokens + '</strong><span class="rail-label">tokens</span></span><span><strong>' + session.calls + '</strong><span class="rail-label">API calls</span></span><span><strong>' + session.tools + '</strong><span class="rail-label">tools</span></span>';
+        const sections = main.querySelectorAll('.section');
+        sections[0].innerHTML = '<div class="row" style="justify-content:space-between"><h3>Session status</h3><span class="status ' + session.stateClass + '">● ' + session.state + '</span></div><p class="subtle">' + session.project + ' · last activity ' + session.age + '</p>';
+        sections[1].innerHTML = '<h3>Session metrics</h3><div class="kpi-grid"><div class="kpi"><span>Tokens</span><b>' + session.tokens + '</b></div><div class="kpi"><span>API calls</span><b>' + session.calls + '</b></div><div class="kpi"><span>Tool calls</span><b>' + session.tools + '</b></div></div>';
+        sections[2].innerHTML = '<h3>Session usefulness</h3><div class="kpi-grid"><div class="kpi"><span>Context / call</span><b>' + session.context + '</b></div><div class="kpi"><span>Rewrite ratio</span><b>' + session.rewrite + '</b></div><div class="kpi"><span>Batching ratio</span><b>' + session.batching + '</b></div></div>';
+        sections[3].innerHTML = '<h3>Session actions</h3><p class="subtle">Resume this session in ' + session.engine + ' from its original project directory. The session identity and metrics remain unchanged.</p>';
+        document.querySelectorAll('[data-session]').forEach(item => item.classList.toggle('selected', item.dataset.session === id));
+        if (activeTerminals.has(id)) renderTerminal(id);
+      }
+      document.querySelectorAll('[data-session]').forEach(item => item.addEventListener('click', event => {
+        event.stopPropagation();
+        showSession(item.dataset.session);
+      }));
+      document.querySelector('.main').addEventListener('click', event => {
+        const stop = event.target.closest('.detail-actions .stop-session');
+        if (stop && activeSessionId) {
+          const session = sessionDetails[activeSessionId];
+          session.state = 'no status';
+          session.stateClass = 'unknown';
+          activeTerminals.delete(activeSessionId);
+          document.querySelector('.inline-terminal')?.remove();
+          showSession(activeSessionId);
+          return;
+        }
+        const action = event.target.closest('.detail-actions .action');
+        if (!action || action.classList.contains('add-session') || !activeSessionId) return;
+        const session = sessionDetails[activeSessionId];
+        const existing = document.querySelector('.inline-terminal');
+        if (existing) {
+          existing.remove();
+          activeTerminals.delete(activeSessionId);
+          action.textContent = 'Resume in terminal';
+          return;
+        }
+        activeTerminals.add(activeSessionId);
+        renderTerminal(activeSessionId);
+        action.textContent = 'Close terminal';
+      });
+      document.querySelectorAll('.project-expand').forEach(button => button.addEventListener('click', event => {
+        event.stopPropagation();
+        const list = button.closest('.project-card').querySelector('.project-session-list');
+        const expanded = button.getAttribute('aria-expanded') === 'true';
+        button.setAttribute('aria-expanded', String(!expanded));
+        list.classList.toggle('collapsed', expanded);
+      }));
+      document.querySelectorAll('.add-session').forEach(button => button.addEventListener('click', event => {
+        event.stopPropagation();
+        const menu = button.nextElementSibling;
+        document.querySelectorAll('.engine-menu.open').forEach(other => { if (other !== menu) other.classList.remove('open'); });
+        menu.classList.toggle('open');
+      }));
+      document.querySelectorAll('.engine-menu button').forEach(button => button.addEventListener('click', event => {
+        event.stopPropagation();
+        const project = button.closest('.project-card')?.dataset.project || 'demo-studio';
+        button.closest('.engine-menu').classList.remove('open');
+        document.querySelector('.project-note').textContent = 'Opening ' + button.dataset.engine + ' in ' + project + '…';
+      }));
+      document.querySelectorAll('.project-card,.session-small').forEach(item => item.addEventListener('click', () => {
+        document.querySelectorAll('.project-card,.session-small').forEach(other => other.classList.remove('selected'));
+        item.classList.add('selected');
+      }));
+      const form = document.getElementById('new-project-form');
+      document.getElementById('new-project').addEventListener('click', () => form.classList.add('open'));
+      document.getElementById('cancel-project').addEventListener('click', () => form.classList.remove('open'));
+      document.getElementById('create-project').addEventListener('click', () => {
+        form.classList.remove('open');
+        document.querySelector('.project-note').textContent = 'New project opened from the selected folder';
+      });
+      setView('live');
+    });
+  </script>
+</body>
+</html>

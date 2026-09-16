@@ -1,0 +1,138 @@
+{
+  "schema_version": "feather-relational-model/0.7",
+  "generated": "2026-09-12",
+  "target": "pigeon",
+  "purpose": "Three latest-state tables only: accounts, projects, sessions.",
+  "storage": {
+    "runtime": "in-memory relational state in first pass",
+    "settings": "<Tauri app-data>/config.toml",
+    "history": "none"
+  },
+  "tables": [
+    {
+      "name": "accounts",
+      "primary_key": ["account_id"],
+      "description": "Current safe identity and capacity for one engine account.",
+      "columns": [
+        {"name":"account_id","type":"TEXT","nullable":false,"pk":true,"description":"Stable local account row id."},
+        {"name":"provider_id","type":"TEXT","nullable":false,"check":"claude-code|codex|opencode","description":"Closed provider discriminator."},
+        {"name":"label","type":"TEXT","nullable":true,"description":"Safe identity display label."},
+        {"name":"organization","type":"TEXT","nullable":true,"description":"Safe organization display value."},
+        {"name":"plan","type":"TEXT","nullable":true,"description":"Engine-reported plan word."},
+        {"name":"tier","type":"TEXT","nullable":true,"description":"Engine-reported tier word."},
+        {"name":"mode","type":"TEXT","nullable":true,"description":"Safe login mode."},
+        {"name":"account_short","type":"TEXT","nullable":true,"description":"Short safe account identifier."},
+        {"name":"signed_in","type":"INTEGER","nullable":false,"description":"Whether safe identity exists."},
+        {"name":"capacity_supported","type":"INTEGER","nullable":false,"description":"Whether capacity is exposed."},
+        {"name":"five_hour_used_pct","type":"REAL","nullable":true,"description":"Latest five-hour utilization."},
+        {"name":"five_hour_resets_at_ms","type":"INTEGER","nullable":true,"description":"Latest five-hour reset time."},
+        {"name":"five_hour_stale","type":"INTEGER","nullable":false,"description":"Whether the five-hour reading is stale."},
+        {"name":"weekly_used_pct","type":"REAL","nullable":true,"description":"Latest weekly utilization."},
+        {"name":"weekly_resets_at_ms","type":"INTEGER","nullable":true,"description":"Latest weekly reset time."},
+        {"name":"weekly_stale","type":"INTEGER","nullable":false,"description":"Whether the weekly reading is stale."},
+        {"name":"reached_limit","type":"TEXT","nullable":true,"description":"Latest engine-reported limit word."},
+        {"name":"provider_summary","type":"TEXT","nullable":true,"description":"Bounded provider names/types projection."},
+        {"name":"read_at_ms","type":"INTEGER","nullable":false,"description":"Latest account read time."},
+        {"name":"problem_kind","type":"TEXT","nullable":true,"description":"Safe current error kind."},
+        {"name":"problem_detail","type":"TEXT","nullable":true,"description":"Safe current error detail."}
+      ],
+      "foreign_keys": []
+    },
+    {
+      "name": "projects",
+      "primary_key": ["project_id"],
+      "description": "Current normalized working directories represented by sessions.",
+      "columns": [
+        {"name":"project_id","type":"TEXT","nullable":false,"pk":true,"description":"Normalized-path key."},
+        {"name":"path","type":"TEXT","nullable":false,"unique":true,"description":"Normalized absolute working-directory path."},
+        {"name":"leaf","type":"TEXT","nullable":false,"description":"Display folder name."},
+        {"name":"last_active_ms","type":"INTEGER","nullable":false,"description":"Latest related session activity."},
+        {"name":"session_count","type":"INTEGER","nullable":false,"description":"Current related-session count."},
+        {"name":"live_session_count","type":"INTEGER","nullable":false,"description":"Current live-session count."}
+      ],
+      "foreign_keys": []
+    },
+    {
+      "name": "sessions",
+      "primary_key": ["provider_id", "sid"],
+      "description": "Current session metadata, metrics, and live state.",
+      "columns": [
+        {"name":"provider_id","type":"TEXT","nullable":false,"pk":true,"check":"claude-code|codex|opencode","description":"Closed provider discriminator."},
+        {"name":"sid","type":"TEXT","nullable":false,"pk":true,"description":"Complete logical provider session id."},
+        {"name":"account_id","type":"TEXT","nullable":true,"fk":"accounts.account_id","description":"Owning account when known."},
+        {"name":"project_id","type":"TEXT","nullable":false,"fk":"projects.project_id","description":"Owning normalized project."},
+        {"name":"cwd","type":"TEXT","nullable":true,"description":"Session working directory."},
+        {"name":"title","type":"TEXT","nullable":false,"description":"Prompt or provider-generated title."},
+        {"name":"name","type":"TEXT","nullable":true,"description":"Optional provider-generated live name."},
+        {"name":"git_branch","type":"TEXT","nullable":true,"description":"Observed branch."},
+        {"name":"first_active_ms","type":"INTEGER","nullable":true,"description":"Earliest UTC activity."},
+        {"name":"last_active_ms","type":"INTEGER","nullable":false,"description":"Latest UTC activity."},
+        {"name":"resumable","type":"INTEGER","nullable":false,"description":"Whether resume is available."},
+        {"name":"resume_blocked_reason","type":"TEXT","nullable":true,"description":"Safe reason resume is unavailable."},
+        {"name":"source_summary","type":"TEXT","nullable":true,"description":"Bounded current source projection."},
+        {"name":"unknown_types","type":"TEXT","nullable":true,"description":"Bounded current diagnostic projection."},
+        {"name":"metrics_state","type":"TEXT","nullable":false,"check":"pending|ready|unavailable","description":"Current metric result state."},
+        {"name":"input_tokens","type":"INTEGER","nullable":true,"description":"Latest input-token total."},
+        {"name":"output_tokens","type":"INTEGER","nullable":true,"description":"Latest output-token total."},
+        {"name":"cache_read","type":"INTEGER","nullable":true,"description":"Latest cache-read total."},
+        {"name":"cache_write","type":"INTEGER","nullable":true,"description":"Latest cache-write total."},
+        {"name":"api_calls","type":"INTEGER","nullable":true,"description":"Latest deduplicated API-call total."},
+        {"name":"tool_calls","type":"INTEGER","nullable":true,"description":"Latest tool-call total."},
+        {"name":"user_turns","type":"INTEGER","nullable":true,"description":"Latest real-user-turn total."},
+        {"name":"duration_ms","type":"INTEGER","nullable":true,"description":"Latest wall-clock duration."},
+        {"name":"reasoning_tokens","type":"INTEGER","nullable":true,"description":"Latest optional reasoning-token total."},
+        {"name":"engine_cost_usd","type":"REAL","nullable":true,"description":"Latest provider-reported cost."},
+        {"name":"metrics_error_kind","type":"TEXT","nullable":true,"description":"Safe current metric error kind."},
+        {"name":"metrics_error_detail","type":"TEXT","nullable":true,"description":"Safe current metric error detail."},
+        {"name":"process_present","type":"INTEGER","nullable":false,"description":"Whether a matching process is observed."},
+        {"name":"live_state","type":"TEXT","nullable":true,"check":"running|needs_you|finished|unknown","description":"running, needs_you, finished, or unknown."},
+        {"name":"live_since_ms","type":"INTEGER","nullable":true,"description":"Current state start."},
+        {"name":"live_raw_word","type":"TEXT","nullable":true,"description":"Unmapped provider status word."},
+        {"name":"live_pid","type":"INTEGER","nullable":true,"description":"Current proven process id."},
+        {"name":"live_console_id","type":"TEXT","nullable":true,"description":"Pigeon console observing it."},
+        {"name":"live_evidence","type":"TEXT","nullable":true,"description":"Bounded current evidence projection."},
+        {"name":"live_observed_at_ms","type":"INTEGER","nullable":true,"description":"Latest observation time."}
+      ],
+      "foreign_keys": [
+        {"columns":["account_id"],"references":"accounts(account_id)","on_delete":"set null"},
+        {"columns":["project_id"],"references":"projects(project_id)","on_delete":"cascade"}
+      ]
+    }
+  ],
+  "special_rules": {
+    "no_directory_project": {"project_id":"__no_directory__","path":"(no directory)","leaf":"(no directory)"},
+    "session_account_assignment":"Match sessions.provider_id to the unique current accounts.provider_id row when known; otherwise account_id is null.",
+    "provider_neutrality":"provider_id is an identity namespace and mapper selector, not a provider-specific data column.",
+    "kpis":"Calculated from current counters at projection time; never stored.",
+    "runtime_only":"Consoles, PTY scrollback, poll deadlines, and source signatures are bounded runtime state."
+  },
+  "views": [
+    {"name":"v_session_rows","from":["sessions","projects"],"join":"sessions.project_id = projects.project_id","purpose":"API SessionRow projection"},
+    {"name":"v_project_summary_live","from":["projects","sessions"],"filter":"sessions.process_present=1","purpose":"Live project cards"},
+    {"name":"v_project_summary_recent","from":["projects","sessions"],"filter":"sessions.last_active_ms >= now - recent_window_days","purpose":"Recent project cards"},
+    {"name":"v_status_snapshot","from":["sessions"],"filter":"process_present=1","purpose":"Status rail and hover"}
+  ],
+  "relationships": [
+    ["accounts", "sessions", "1:N", "sessions.account_id → accounts.account_id"],
+    ["projects", "sessions", "1:N", "sessions.project_id → projects.project_id"]
+  ],
+  "credential_sources": {
+    "claude_identity": "~/.claude.json → oauthAccount safe fields",
+    "claude_capacity": "~/.claude/.credentials.json, then macOS Keychain service Claude Code-credentials",
+    "codex_identity": "~/.codex/auth.json → auth_mode and tokens.account_id only",
+    "codex_capacity": "newest rollout tail rate_limits",
+    "opencode_identity": "~/.local/share/opencode/auth.json provider names/types and account.email only"
+  },
+  "derived_formulas": {
+    "context_per_call": "cache_read / api_calls",
+    "rewrite_ratio": "cache_write / cache_read",
+    "batching_ratio": "tool_calls / api_calls",
+    "zero_denominator": "NULL"
+  },
+  "write_policy": {
+    "polling": "read-heavy; unchanged polls produce zero table writes",
+    "metrics": "replace current session columns only when source signature changes",
+    "live": "replace current session columns only on semantic change",
+    "history": "none"
+  }
+}

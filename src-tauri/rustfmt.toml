@@ -1,0 +1,4 @@
+# 100 columns, matching the comment width this codebase is written to. rustfmt's default is 100
+# for code but its `comment_width` machinery is nightly-only, so comments are kept at 100 by hand
+# and this only has to agree with them.
+max_width = 100
