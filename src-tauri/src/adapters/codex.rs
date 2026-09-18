@@ -32,11 +32,12 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use super::wait::{OwnerWait, WaitPolicy, WaitSignal};
 use super::{ProviderAdapter, ProviderSessionReport, SessionCandidate};
 use crate::api::errors::{EngineError, ErrorDetail, ErrorKind};
 use crate::domain::{
-    Capacity, CapacityWindow, CapacityWindowName, Diagnostics, FileSignature, Identity, Metrics,
-    ProviderId, ResumeBlockedReason, Session, SessionKey, SourceSignature, SourceSummary,
+    Capacity, CapacityWindow, CapacityWindowName, Diagnostics, FileSignature, Identity, LiveState,
+    Metrics, ProviderId, ResumeBlockedReason, Session, SessionKey, SourceSignature, SourceSummary,
 };
 use crate::util;
 
@@ -1068,6 +1069,169 @@ fn text(value: Option<&Value>) -> Option<String> {
         None
     } else {
         Some(raw.to_string())
+    }
+}
+
+// ------------------------------------------------------------------------------------------- //
+// Owner interactions: permission, question, interruption
+// ------------------------------------------------------------------------------------------- //
+
+/// How much of a rollout is read at a time while finding the last turn marker.
+///
+/// Codex can append megabytes of tool output after `task_started`. A fixed tail window therefore
+/// turns a healthy, actively working session into `Unknown`. The reader walks backwards in chunks
+/// so memory stays bounded while the search remains correct for arbitrarily long turns.
+const ROLLOUT_SCAN_CHUNK_BYTES: u64 = 1024 * 1024;
+
+/// Whether the rollout's last turn is open or closed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CodexTurn {
+    Open,
+    /// Carries the engine's own word: `task_complete` or `turn_aborted`.
+    Closed(String),
+}
+
+/// Walk a rollout backwards and find the last turn marker.
+///
+/// **Why this is reliable enough to use.** Across the 9.9 MB rollout measured 2026-09-13 the
+/// markers pair exactly: 50 `task_started` against 37 `task_complete` + 13 `turn_aborted` = 50.
+/// Every started turn is closed by one of the two, so "the last marker is `task_started`" means a
+/// turn is genuinely open and "the last marker is a close" means Codex is back at its prompt.
+pub fn codex_turn(rollout: &Path) -> Option<(CodexTurn, Option<i64>)> {
+    let mut file = File::open(rollout).ok()?;
+    let mut end = file.metadata().ok()?.len();
+    let mut boundary = Vec::new();
+
+    while end > 0 {
+        let start = end.saturating_sub(ROLLOUT_SCAN_CHUNK_BYTES);
+        let amount = (end - start) as usize;
+        file.seek(SeekFrom::Start(start)).ok()?;
+        let mut bytes = vec![0; amount];
+        file.read_exact(&mut bytes).ok()?;
+        bytes.extend_from_slice(&boundary);
+        let text = String::from_utf8_lossy(&bytes);
+        let lines: Vec<&str> = text.lines().collect();
+
+        // Reverse, so the first match is the last record. The first line is split at the chunk
+        // boundary when start > 0; carry that line into the next earlier chunk before parsing it.
+        for (index, line) in lines.iter().enumerate().rev() {
+            if start > 0 && index == 0 {
+                continue;
+            }
+            let line = line.trim();
+            if !line.starts_with('{') {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            let kind = value
+                .get("payload")
+                .and_then(|p| p.get("type"))
+                .and_then(|t| t.as_str());
+            let turn = match kind {
+                Some("task_started") => CodexTurn::Open,
+                Some(word @ ("task_complete" | "turn_aborted")) => {
+                    CodexTurn::Closed(word.to_string())
+                }
+                _ => continue,
+            };
+            let ts = value
+                .get("timestamp")
+                .and_then(|t| t.as_str())
+                .and_then(parse_iso_ms);
+            return Some((turn, ts));
+        }
+
+        if start == 0 {
+            break;
+        }
+        boundary = lines
+            .first()
+            .map(|line| line.as_bytes().to_vec())
+            .unwrap_or_default();
+        end = start;
+    }
+    None
+}
+
+/// Codex's [`WaitPolicy`]: the `PermissionRequest` hook for permission, the rollout's
+/// `turn_aborted` marker for interruption.
+///
+/// **What it cannot see, stated plainly.** `request_user_input` — the model asking a question —
+/// has **no hook event**; `updatedInput`, the field a reply would travel in, is reserved in
+/// Codex's own schema and a hook that sends it fails closed (openai/codex#28969). So `question()`
+/// is always `None`: a Codex question reads `Running`, and this type says so rather than inventing
+/// a signal.
+pub struct CodexWait<'a> {
+    turn: Option<&'a CodexTurn>,
+    /// The newest hook event for this thread, when the installed hook has fired one.
+    hook_event: Option<&'a str>,
+}
+
+impl<'a> CodexWait<'a> {
+    pub fn new(turn: Option<&'a CodexTurn>, hook_event: Option<&'a str>) -> Self {
+        Self { turn, hook_event }
+    }
+
+    /// The turn state once the owner cases are set aside: open → running, closed → waiting, and no
+    /// marker at all → unknown rather than a guess.
+    pub fn turn_state(&self) -> LiveState {
+        match self.turn {
+            Some(CodexTurn::Open) => LiveState::Running,
+            Some(CodexTurn::Closed(_)) => LiveState::Waiting,
+            None => LiveState::Unknown,
+        }
+    }
+
+    /// The engine's own word for the turn, carried into `raw_word`.
+    pub fn turn_word(&self) -> Option<String> {
+        match self.turn {
+            Some(CodexTurn::Open) => Some("task_started".to_string()),
+            Some(CodexTurn::Closed(word)) => Some(word.clone()),
+            None => None,
+        }
+    }
+}
+
+impl WaitPolicy for CodexWait<'_> {
+    fn permission(&self) -> Option<WaitSignal> {
+        // The hook may only overrule a RUNNING reading: the event file is append-only, and a
+        // `PermissionRequest` line from an earlier turn would otherwise resurrect a session Codex
+        // has already finished.
+        if self.hook_event == Some("PermissionRequest")
+            && matches!(self.turn, Some(CodexTurn::Open))
+        {
+            return Some(
+                WaitSignal::new(OwnerWait::Permission)
+                    .word("PermissionRequest")
+                    .because(
+                        "Codex's PermissionRequest hook fired, which the rollout cannot record"
+                            .to_string(),
+                    ),
+            );
+        }
+        None
+    }
+
+    fn question(&self) -> Option<WaitSignal> {
+        // Codex publishes no question signal at all — see the type's note. `None` is the honest
+        // answer, not a placeholder.
+        None
+    }
+
+    fn interruption(&self) -> Option<WaitSignal> {
+        if matches!(self.turn, Some(CodexTurn::Closed(word)) if word == "turn_aborted") {
+            return Some(
+                WaitSignal::new(OwnerWait::Interruption)
+                    .word("turn_aborted")
+                    .because(
+                        "Codex's rollout records turn_aborted, so the turn was cut short"
+                            .to_string(),
+                    ),
+            );
+        }
+        None
     }
 }
 
@@ -2183,5 +2347,114 @@ mod tests {
             assert!(!row.title.is_empty());
             assert!(row.source.files >= 1);
         }
+    }
+
+    // -- Turn marker and timestamps, moved here with the reader ---------------------------------
+
+    #[test]
+    fn a_codex_turn_is_read_from_the_tail_and_no_marker_is_unknown() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("rollout.jsonl");
+        // Padding ahead of the markers, so the tail window is doing real work.
+        let mut body = String::new();
+        for _ in 0..400 {
+            body.push_str("{\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\"}}\n");
+        }
+        body.push_str(
+            "{\"timestamp\":\"2026-09-13T21:00:00.000Z\",\
+             \"payload\":{\"type\":\"task_started\"}}\n",
+        );
+        std::fs::write(&path, &body).expect("write");
+        assert_eq!(
+            codex_turn(&path),
+            Some((CodexTurn::Open, parse_iso_ms("2026-09-13T21:00:00.000Z")))
+        );
+
+        body.push_str(
+            "{\"timestamp\":\"2026-09-13T21:04:17.468Z\",\
+             \"payload\":{\"type\":\"task_complete\"}}\n",
+        );
+        std::fs::write(&path, &body).expect("write");
+        let (turn, ts) = codex_turn(&path).expect("a closed turn");
+        assert_eq!(turn, CodexTurn::Closed("task_complete".into()));
+        assert_eq!(ts, parse_iso_ms("2026-09-13T21:04:17.468Z"));
+
+        // No marker at all is Unknown, not a guess.
+        std::fs::write(&path, b"{\"payload\":{\"type\":\"reasoning\"}}\n").expect("write");
+        assert_eq!(codex_turn(&path), None);
+    }
+
+    #[test]
+    fn a_codex_turn_marker_survives_more_than_one_megabyte_of_following_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("rollout.jsonl");
+        let mut body = String::from(
+            "{\"timestamp\":\"2026-09-14T21:00:00.000Z\",\"payload\":{\"type\":\"task_started\"}}\n",
+        );
+        for _ in 0..30_000 {
+            body.push_str(
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\",\"text\":\"output\"}}\n",
+            );
+        }
+        std::fs::write(&path, body).expect("write");
+
+        assert_eq!(
+            codex_turn(&path),
+            Some((CodexTurn::Open, parse_iso_ms("2026-09-14T21:00:00.000Z")))
+        );
+    }
+
+    // -- The three owner cases, through the shared policy ---------------------------------------
+
+    #[test]
+    fn a_permission_hook_over_an_open_turn_is_the_permission_case() {
+        let open = CodexTurn::Open;
+        let wait = CodexWait::new(Some(&open), Some("PermissionRequest"));
+        let signal = wait.owner_wait().expect("the hook parks it on the owner");
+        assert_eq!(signal.case, OwnerWait::Permission);
+        assert_eq!(signal.case.state(), LiveState::NeedsYou);
+        assert_eq!(signal.raw_word.as_deref(), Some("PermissionRequest"));
+    }
+
+    #[test]
+    fn a_stale_permission_hook_cannot_reopen_a_closed_turn() {
+        let closed = CodexTurn::Closed("task_complete".into());
+        let wait = CodexWait::new(Some(&closed), Some("PermissionRequest"));
+        assert!(
+            wait.permission().is_none(),
+            "an append-only hook line from an earlier turn must not resurrect a finished one"
+        );
+        assert_eq!(wait.turn_state(), LiveState::Waiting);
+    }
+
+    #[test]
+    fn codex_has_no_question_signal_and_says_so_rather_than_inventing_one() {
+        let open = CodexTurn::Open;
+        let wait = CodexWait::new(Some(&open), Some("PreToolUse"));
+        assert!(
+            wait.question().is_none(),
+            "request_user_input has no hook event (openai/codex#28969)"
+        );
+        assert!(wait.owner_wait().is_none());
+        assert_eq!(wait.turn_state(), LiveState::Running);
+    }
+
+    #[test]
+    fn a_turn_aborted_marker_is_the_interruption_case_and_reads_waiting() {
+        let aborted = CodexTurn::Closed("turn_aborted".into());
+        let signal = CodexWait::new(Some(&aborted), None)
+            .owner_wait()
+            .expect("an abort is a wait");
+        assert_eq!(signal.case, OwnerWait::Interruption);
+        assert_eq!(signal.case.state(), LiveState::Waiting);
+        assert_eq!(signal.raw_word.as_deref(), Some("turn_aborted"));
+    }
+
+    #[test]
+    fn no_turn_marker_is_unknown_rather_than_a_guess() {
+        let wait = CodexWait::new(None, None);
+        assert!(wait.owner_wait().is_none());
+        assert_eq!(wait.turn_state(), LiveState::Unknown);
+        assert_eq!(wait.turn_word(), None);
     }
 }

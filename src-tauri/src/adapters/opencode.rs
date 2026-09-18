@@ -47,6 +47,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension};
 
+use super::wait::{OwnerWait, WaitPolicy, WaitSignal};
 use super::{ProviderAdapter, ProviderSessionReport, SessionCandidate};
 use crate::api::errors::{EngineError, ErrorDetail, ErrorKind, Secret};
 use crate::domain::{
@@ -103,6 +104,188 @@ pub struct OpenCodeActivity {
     pub since_ms: Option<i64>,
     pub raw_word: Option<String>,
     pub evidence: Vec<String>,
+}
+
+/// The newest part of a session, projected out of its JSON so the policy and the turn reading do
+/// not each re-parse it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OpenCodePart {
+    since_ms: i64,
+    kind: Option<String>,
+    status: Option<String>,
+    reason: Option<String>,
+    assistant_completed: bool,
+    interrupted: bool,
+    /// The part's status is `running`/`pending` and its tool is `question`: the engine is blocked
+    /// on an answer. Measured 2026-09-16 — a `question` cannot be running without being asked.
+    question: bool,
+}
+
+impl OpenCodePart {
+    fn project(
+        since_ms: i64,
+        parsed: &serde_json::Value,
+        message: Option<&serde_json::Value>,
+    ) -> Self {
+        let kind = parsed.get("type").and_then(serde_json::Value::as_str);
+        let status = parsed
+            .get("state")
+            .and_then(|value| value.get("status"))
+            .and_then(serde_json::Value::as_str);
+        let reason = parsed.get("reason").and_then(serde_json::Value::as_str);
+        let tool = parsed.get("tool").and_then(serde_json::Value::as_str);
+        let assistant_completed = message
+            .and_then(|message| message.get("time")?.get("completed")?.as_i64())
+            .is_some();
+        // **An interrupt leaves the step unfinished.** OpenCode records `MessageAbortedError` on
+        // the assistant message and closes it, but the newest part is still a `step-start` or a
+        // `tool` whose state never left `running`. Reading the part alone therefore reports
+        // `Running` for a turn the owner has already stopped.
+        let interrupted = message
+            .and_then(|message| message.get("error")?.get("name")?.as_str())
+            .is_some_and(|name| name == "MessageAbortedError");
+        // The question case is deliberately the *last* of the three to hold: an aborted or
+        // completed message means the turn is over, and a `question` part left behind must not
+        // reopen it. This preserves the order the single classifier used before the policy split.
+        let question = !interrupted
+            && !assistant_completed
+            && kind == Some("tool")
+            && matches!(status, Some("pending" | "running"))
+            && tool == Some("question");
+        Self {
+            since_ms,
+            kind: kind.map(str::to_string),
+            status: status.map(str::to_string),
+            reason: reason.map(str::to_string),
+            assistant_completed,
+            interrupted,
+            question,
+        }
+    }
+
+    /// The running/waiting/unknown reading once the three owner cases are set aside.
+    fn turn_reading(&self) -> (LiveState, String, String) {
+        let kind = self.kind.as_deref();
+        let status = self.status.as_deref();
+        let reason = self.reason.as_deref();
+        if self.assistant_completed {
+            // **A completed message means no turn is in flight**, and that outranks the shape of the
+            // last part. Measured on this machine 2026-09-16: of every session's newest part, the
+            // only one whose message was NOT completed was the one genuinely `tool|running`.
+            return (
+                LiveState::Waiting,
+                kind.unwrap_or("completed").into(),
+                "latest assistant message is completed".into(),
+            );
+        }
+        match (kind, status, reason) {
+            (Some("step-finish"), _, Some("stop")) => (
+                LiveState::Waiting,
+                "step-finish:stop".into(),
+                "latest OpenCode step finished and stopped".into(),
+            ),
+            (Some("step-finish"), _, Some(reason)) => (
+                LiveState::Running,
+                format!("step-finish:{reason}"),
+                format!("latest OpenCode step finished with {reason}; turn continues"),
+            ),
+            (Some("step-finish"), _, None) => (
+                LiveState::Running,
+                "step-finish".into(),
+                "latest OpenCode step has no stop reason; turn may continue".into(),
+            ),
+            // The policy has already handled a `question` tool; what is left pending here is an
+            // unconfirmed approval, which is honestly unknown rather than a guess.
+            (Some("permission"), _, _) | (Some("tool"), Some("pending"), _) => (
+                LiveState::Unknown,
+                kind.unwrap_or("pending").into(),
+                "latest OpenCode tool is pending, but approval has not been confirmed".into(),
+            ),
+            (_, Some("running" | "pending"), _) | (Some("step-start"), _, _) => (
+                LiveState::Running,
+                kind.unwrap_or("running").into(),
+                "latest OpenCode part is unfinished".into(),
+            ),
+            (Some("tool"), Some("error"), _) => (
+                LiveState::Waiting,
+                "tool:error".into(),
+                "latest OpenCode tool ended with an error or was rejected".into(),
+            ),
+            (Some(kind), _, _)
+                if matches!(
+                    kind,
+                    "text" | "reasoning" | "tool" | "file" | "patch" | "subtask" | "step-start"
+                ) =>
+            {
+                (
+                    LiveState::Running,
+                    kind.into(),
+                    "latest OpenCode part is part of an unfinished turn".into(),
+                )
+            }
+            _ => (
+                LiveState::Unknown,
+                kind.unwrap_or("unknown").into(),
+                "latest OpenCode part has no recognized activity marker".into(),
+            ),
+        }
+    }
+}
+
+/// The facts OpenCode's [`WaitPolicy`] decides over.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct OpenCodeWaitFacts {
+    /// Evidence that an approval is outstanding, from the event stream or the permission table.
+    permission: Option<String>,
+    question: bool,
+    interrupted: bool,
+}
+
+/// OpenCode's [`WaitPolicy`]: a pending permission for permission, a `question` tool for question,
+/// and `MessageAbortedError` for interruption.
+///
+/// **What it cannot see, stated plainly.** OpenCode does not persist a live approval ask in the
+/// `permission` table — measured on this machine 2026-09-18, an `external_directory` ask held the
+/// turn for 8.6 minutes with zero rows. The pending-part event is the only on-disk trace, and it
+/// fires only for the tool shapes OpenCode emits one for; a wait it does not record is `None`
+/// here rather than a guess.
+struct OpenCodeWait<'a> {
+    facts: &'a OpenCodeWaitFacts,
+}
+
+impl<'a> OpenCodeWait<'a> {
+    fn new(facts: &'a OpenCodeWaitFacts) -> Self {
+        Self { facts }
+    }
+}
+
+impl WaitPolicy for OpenCodeWait<'_> {
+    fn permission(&self) -> Option<WaitSignal> {
+        self.facts.permission.as_ref().map(|reason| {
+            WaitSignal::new(OwnerWait::Permission)
+                .word("permission")
+                .because(reason.clone())
+        })
+    }
+
+    fn question(&self) -> Option<WaitSignal> {
+        self.facts.question.then(|| {
+            WaitSignal::new(OwnerWait::Question)
+                .word("question")
+                .because("OpenCode is waiting on an answer to a question".to_string())
+        })
+    }
+
+    fn interruption(&self) -> Option<WaitSignal> {
+        self.facts.interrupted.then(|| {
+            WaitSignal::new(OwnerWait::Interruption)
+                .word("MessageAbortedError")
+                .because(
+                    "the latest OpenCode turn was aborted, so the engine is back at its prompt"
+                        .to_string(),
+                )
+        })
+    }
 }
 
 /// The adapter. Rooted at a directory so a test can point it at a fixture without faking `$HOME`.
@@ -743,30 +926,71 @@ impl Db {
         self.require("part", &["session_id", "time_updated", "data"])?;
         self.require("message", &["session_id", "time_updated", "data"])?;
 
+        // Gather the facts for the shared policy before deciding anything. Permission is the one
+        // case with two independent sources; either is enough.
+        //
         // The mutable part row can move from pending to running while the approval UI is still
         // visible. The append-only event stream preserves the transition Pigeon needs to render
-        // NeedsYou, so consult its newest part update before reading the current projection.
-        if self.pending_part_event(sid)? {
+        // NeedsYou, so consult its newest part update as well as the permission table.
+        let permission = if self.pending_part_event(sid)? {
+            Some("OpenCode's event stream records a pending owner approval".to_string())
+        } else if self.pending_permission(sid)? {
+            // The permission table is the authoritative human-waiting signal. A pending tool part
+            // alone is ambiguous: it can be an ordinary tool still executing. The permission row is
+            // scoped through the session's project, so it promotes only this session.
+            Some("OpenCode has a pending permission for this session".to_string())
+        } else {
+            None
+        };
+
+        let part = self.newest_part(sid)?;
+        let facts = OpenCodeWaitFacts {
+            permission,
+            question: part.as_ref().is_some_and(|p| p.question),
+            interrupted: part.as_ref().is_some_and(|p| p.interrupted),
+        };
+        let wait = OpenCodeWait::new(&facts);
+
+        // The shared policy decides the three owner cases in one place; only the turn shape below
+        // is OpenCode's own.
+        if let Some(signal) = wait.owner_wait() {
+            let since_ms = if signal.case == OwnerWait::Permission {
+                None
+            } else {
+                part.as_ref().map(|p| p.since_ms)
+            };
             return Ok(OpenCodeActivity {
-                state: LiveState::NeedsYou,
-                since_ms: None,
-                raw_word: Some("permission".into()),
-                evidence: vec!["OpenCode's event stream records a pending owner approval".into()],
+                state: signal.case.state(),
+                since_ms,
+                raw_word: Some(
+                    signal
+                        .raw_word
+                        .unwrap_or_else(|| signal.case.word().to_string()),
+                ),
+                evidence: signal.evidence.into_iter().collect(),
             });
         }
 
-        // OpenCode's permission table is the authoritative human-waiting signal. A pending tool
-        // part alone is ambiguous: it can be an ordinary tool still executing. The permission row
-        // is scoped through the session's project, so it can promote only this session to NeedsYou.
-        if self.pending_permission(sid)? {
+        let Some(part) = part else {
             return Ok(OpenCodeActivity {
-                state: LiveState::NeedsYou,
+                state: LiveState::Unknown,
                 since_ms: None,
-                raw_word: Some("permission".into()),
-                evidence: vec!["OpenCode has a pending permission for this session".into()],
+                raw_word: None,
+                evidence: vec!["no OpenCode turn marker exists for this session".into()],
             });
-        }
+        };
+        let (state, raw_word, explanation) = part.turn_reading();
+        Ok(OpenCodeActivity {
+            state,
+            since_ms: Some(part.since_ms),
+            raw_word: Some(raw_word),
+            evidence: vec![explanation],
+        })
+    }
 
+    /// The newest part for a session, projected into the facts the policy and the turn reading
+    /// need. `None` when the session has no part rows at all.
+    fn newest_part(&self, sid: &str) -> Result<Option<OpenCodePart>, EngineError> {
         let mut stmt = self.prepare(
             "SELECT p.time_updated, p.data, m.data
              FROM part p LEFT JOIN message m ON m.id = p.message_id
@@ -775,127 +999,21 @@ impl Db {
         )?;
         let mut rows = stmt.query([sid]).map_err(|e| self.classify(&e))?;
         let Some(row) = rows.next().map_err(|e| self.classify(&e))? else {
-            return Ok(OpenCodeActivity {
-                state: LiveState::Unknown,
-                since_ms: None,
-                raw_word: None,
-                evidence: vec!["no OpenCode turn marker exists for this session".into()],
-            });
+            return Ok(None);
         };
         let since_ms: i64 = row.get(0).map_err(|e| self.classify(&e))?;
         let data: String = row.get(1).map_err(|e| self.classify(&e))?;
         let message_data: Option<String> = row.get(2).map_err(|e| self.classify(&e))?;
         let parsed: serde_json::Value = serde_json::from_str(&data)
             .map_err(|_| fields_error(&["part.data: valid JSON object"]))?;
-        let kind = parsed.get("type").and_then(serde_json::Value::as_str);
-        let status = parsed
-            .get("state")
-            .and_then(|value| value.get("status"))
-            .and_then(serde_json::Value::as_str);
-        let reason = parsed.get("reason").and_then(serde_json::Value::as_str);
-        let tool_name = parsed.get("tool").and_then(serde_json::Value::as_str);
         let message = message_data
             .as_deref()
             .and_then(|data| serde_json::from_str::<serde_json::Value>(data).ok());
-        let assistant_completed = message
-            .as_ref()
-            .and_then(|message| message.get("time")?.get("completed")?.as_i64())
-            .is_some();
-        // **An interrupt leaves the step unfinished.** OpenCode records `MessageAbortedError` on
-        // the assistant message and closes it, but the newest part is still a `step-start` or a
-        // `tool` whose state never left `running`. Reading the part alone therefore reports
-        // `Running` for a turn the owner has already stopped — the same wrong signal, from the same
-        // cause, as Codex's open `task_started`.
-        let aborted = message
-            .as_ref()
-            .and_then(|message| message.get("error")?.get("name")?.as_str())
-            .is_some_and(|name| name == "MessageAbortedError");
-
-        let (state, raw_word, explanation) = if aborted {
-            (
-                LiveState::Waiting,
-                "MessageAbortedError".into(),
-                "the latest OpenCode turn was aborted, so the engine is back at its prompt".into(),
-            )
-        } else if assistant_completed {
-            // **A completed message means no turn is in flight**, and that outranks the shape of the
-            // last part. Measured on this machine 2026-09-16: of every session's newest part, the
-            // only one whose message was NOT completed was the one genuinely `tool|running`.
-            (
-                LiveState::Waiting,
-                kind.unwrap_or("completed").into(),
-                "latest assistant message is completed".into(),
-            )
-        } else {
-            match (kind, status, reason) {
-                // **A `question` tool is the engine waiting on the owner, and OpenCode reports it
-                // `running` for the whole wait.** Measured 2026-09-16: the append-only event stream
-                // carries `pending -> running -> completed`, so the part's status alone says "working"
-                // while the agent is in fact blocked until an answer arrives. The tool's own name is
-                // the signal — a `question` cannot be running without being asked.
-                (Some("tool"), Some("pending" | "running"), _) if tool_name == Some("question") => {
-                    (
-                        LiveState::NeedsYou,
-                        "question".into(),
-                        "OpenCode is waiting on an answer to a question".into(),
-                    )
-                }
-                (Some("step-finish"), _, Some("stop")) => (
-                    LiveState::Waiting,
-                    "step-finish:stop".into(),
-                    "latest OpenCode step finished and stopped".into(),
-                ),
-                (Some("step-finish"), _, Some(reason)) => (
-                    LiveState::Running,
-                    format!("step-finish:{reason}"),
-                    format!("latest OpenCode step finished with {reason}; turn continues"),
-                ),
-                (Some("step-finish"), _, None) => (
-                    LiveState::Running,
-                    "step-finish".into(),
-                    "latest OpenCode step has no stop reason; turn may continue".into(),
-                ),
-                (Some("permission"), _, _) | (Some("tool"), Some("pending"), _) => (
-                    LiveState::Unknown,
-                    kind.unwrap_or("pending").into(),
-                    "latest OpenCode tool is pending, but approval has not been confirmed".into(),
-                ),
-                (_, Some("running" | "pending"), _) | (Some("step-start"), _, _) => (
-                    LiveState::Running,
-                    kind.unwrap_or("running").into(),
-                    "latest OpenCode part is unfinished".into(),
-                ),
-                (Some("tool"), Some("error"), _) => (
-                    LiveState::Waiting,
-                    "tool:error".into(),
-                    "latest OpenCode tool ended with an error or was rejected".into(),
-                ),
-                (Some(kind), _, _)
-                    if matches!(
-                        kind,
-                        "text" | "reasoning" | "tool" | "file" | "patch" | "subtask" | "step-start"
-                    ) =>
-                {
-                    (
-                        LiveState::Running,
-                        kind.into(),
-                        "latest OpenCode part is part of an unfinished turn".into(),
-                    )
-                }
-                _ => (
-                    LiveState::Unknown,
-                    kind.unwrap_or("unknown").into(),
-                    "latest OpenCode part has no recognized activity marker".into(),
-                ),
-            }
-        };
-
-        Ok(OpenCodeActivity {
-            state,
-            since_ms: Some(since_ms),
-            raw_word: Some(raw_word),
-            evidence: vec![explanation],
-        })
+        Ok(Some(OpenCodePart::project(
+            since_ms,
+            &parsed,
+            message.as_ref(),
+        )))
     }
 
     fn pending_permission(&self, sid: &str) -> Result<bool, EngineError> {
@@ -2314,5 +2432,93 @@ mod tests {
             rows, 0,
             "immutable=1 reads past the WAL — which is why it is guarded"
         );
+    }
+
+    // -- The three owner cases, through the shared policy ---------------------------------------
+
+    #[test]
+    fn opencode_permits_and_questions_need_the_owner_and_an_abort_hands_the_turn_back() {
+        let permission = OpenCodeWaitFacts {
+            permission: Some("a pending event".into()),
+            ..Default::default()
+        };
+        let signal = OpenCodeWait::new(&permission)
+            .owner_wait()
+            .expect("permission");
+        assert_eq!(signal.case, OwnerWait::Permission);
+        assert_eq!(signal.case.state(), LiveState::NeedsYou);
+
+        let question = OpenCodeWaitFacts {
+            question: true,
+            ..Default::default()
+        };
+        let signal = OpenCodeWait::new(&question).owner_wait().expect("question");
+        assert_eq!(signal.case, OwnerWait::Question);
+        assert_eq!(signal.case.state(), LiveState::NeedsYou);
+
+        let interrupted = OpenCodeWaitFacts {
+            interrupted: true,
+            ..Default::default()
+        };
+        let signal = OpenCodeWait::new(&interrupted)
+            .owner_wait()
+            .expect("interruption");
+        assert_eq!(signal.case, OwnerWait::Interruption);
+        assert_eq!(signal.case.state(), LiveState::Waiting);
+    }
+
+    #[test]
+    fn opencode_precedence_is_permission_then_question_then_interruption() {
+        let all = OpenCodeWaitFacts {
+            permission: Some("a pending event".into()),
+            question: true,
+            interrupted: true,
+        };
+        assert_eq!(
+            OpenCodeWait::new(&all).owner_wait().unwrap().case,
+            OwnerWait::Permission
+        );
+        let q_and_i = OpenCodeWaitFacts {
+            permission: None,
+            question: true,
+            interrupted: true,
+        };
+        assert_eq!(
+            OpenCodeWait::new(&q_and_i).owner_wait().unwrap().case,
+            OwnerWait::Question
+        );
+    }
+
+    /// **The gap, pinned.** A live approval that OpenCode never writes a pending event for — an
+    /// `external_directory` ask, measured 2026-09-18 — leaves no trace the adapter can read, so
+    /// the policy answers `None` rather than inventing a permission. The turn reading then says
+    /// what the newest part says; it does not claim the owner is needed.
+    #[test]
+    fn a_permission_with_no_persisted_trace_is_a_stated_absence_not_a_guess() {
+        let facts = OpenCodeWaitFacts::default();
+        assert!(OpenCodeWait::new(&facts).owner_wait().is_none());
+    }
+
+    #[test]
+    fn an_aborted_turn_reads_waiting_even_though_the_part_is_still_running() {
+        let fx = Fixture::new();
+        fx.insert_session(&TestSession::new("ses_root"));
+        fx.insert_message(
+            "msg",
+            "ses_root",
+            r#"{"role":"assistant","time":{"created":1,"completed":2},"error":{"name":"MessageAbortedError","data":{"message":"Aborted"}}}"#,
+        );
+        fx.insert_part(
+            "p1",
+            "ses_root",
+            r#"{"type":"tool","state":{"status":"running"}}"#,
+        );
+
+        let activity = fx
+            .adapter()
+            .read_activity("ses_root")
+            .expect("activity should be readable");
+        assert_eq!(activity.state, LiveState::Waiting);
+        assert_eq!(activity.raw_word.as_deref(), Some("MessageAbortedError"));
     }
 }

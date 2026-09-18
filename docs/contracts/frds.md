@@ -1094,6 +1094,14 @@ interface Settings { hover: { visible: boolean; corner: "tl"|"tr"|"bl"|"br"|null
 
 ## 6. Live status decision table
 
+**The three owner-wait cases are one policy, resolved first.** Every engine implements
+`adapters::wait::WaitPolicy` — `permission`, `question`, `interruption`, each returning a
+`WaitSignal` or a stated `None` — and the provided `owner_wait()` applies the precedence
+**permission → question → interruption**, with `Permission`/`Question` → **needs you** and
+`Interruption` → **finished**. Only when no owner case is outstanding does the ordinary
+running/waiting/unknown turn call below apply. The precedence and the trait are recorded in
+`docs/decisions/0003-wait-policy.md`.
+
 Evaluated per `(engine, sid)` in order; the first matching row decides.
 
 | # | Evidence | State | since |
@@ -1105,12 +1113,14 @@ Evaluated per `(engine, sid)` in order; the first matching row decides.
 | 5 | Claude file `idle`, terminal assistant `tool_use` unanswered and named `AskUserQuestion` / `ExitPlanMode` | **needs you** | block `ts` |
 | 5b | Claude file, pid alive, `status == idle` | **finished** | `statusUpdatedAt` |
 | 6 | Claude file, pid alive, any other word | **unknown** (`rawWord` shown) | `statusUpdatedAt` |
-| 7 | Codex process attached, tail last turn event `task_started`, or a `user_message` after a closing event | **running** | newest work record ts |
+| 7 | Codex process attached, rollout turn open (`task_started`), and the installed `PermissionRequest` hook is the newest event for the thread | **needs you** | event ts |
+| 7b | Codex process attached, tail last turn event `task_started`, or a `user_message` after a closing event | **running** | newest work record ts |
 | 8 | Codex process attached, tail `task_complete` / `turn_aborted` / `error` | **finished** | event ts |
 | 9 | Codex process attached, no turn event found | **unknown** ("no turn event in tail") | process start |
-| 10 | OpenCode process in the directory, this is its newest session, `permission` row for its project | **needs you** | permission `time_created` |
-| 11 | OpenCode process, newest session, newest assistant message `time.completed == null` | **running** | message `time.created` |
-| 12 | OpenCode process, newest session, newest assistant message completed | **finished** | `time.completed` |
+| 10 | OpenCode process in the directory, this is its newest session, a pending approval in the event stream or a `permission` row for its project | **needs you** | pending event, else permission `time_created` |
+| 10b | OpenCode process, newest session, newest part is a `question` tool `running`/`pending` | **needs you** | part `time_updated` |
+| 11 | OpenCode process, newest session, newest assistant message `time.completed == null` and no owner case outstanding | **running** | message `time.created` |
+| 12 | OpenCode process, newest session, newest assistant message completed, or `MessageAbortedError` on it | **finished** | `time.completed` |
 | 13 | pigeon hosted a console for it and it exited | **no status** (`null`) | — |
 | 14 | no live evidence of any kind | **no status** (`null`): no badge, not counted | — |
 | 15 | the process table could not be read | **unknown** ("process table unavailable") for every row that would otherwise be status-less | — |

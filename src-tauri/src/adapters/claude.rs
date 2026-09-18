@@ -37,11 +37,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use super::wait::{OwnerWait, WaitPolicy, WaitSignal};
 use super::{ProviderAdapter, ProviderSessionReport, SessionCandidate};
 use crate::api::errors::{EngineError, ErrorDetail, ErrorKind, Secret};
 use crate::domain::{
-    Capacity, CapacityWindow, CapacityWindowName, Diagnostics, FileSignature, Identity, Metrics,
-    ProviderId, ResumeBlockedReason, Session, SessionKey, SourceSignature, SourceSummary,
+    Capacity, CapacityWindow, CapacityWindowName, Diagnostics, FileSignature, Identity, LiveState,
+    Metrics, ProviderId, ResumeBlockedReason, Session, SessionKey, SourceSignature, SourceSummary,
 };
 use crate::util::{is_uuid, mtime_ms, now_ms, tidy_title};
 
@@ -1283,6 +1284,238 @@ fn read_macos_keychain(service: &str) -> KeychainAnswer {
 }
 
 // ------------------------------------------------------------------------------------------- //
+// Owner interactions: permission, question, interruption
+// ------------------------------------------------------------------------------------------- //
+
+/// The tools Claude parks on the owner with. `frds.md` row 5 names both, and the name is the only
+/// signal the transcript carries — the record shape is an ordinary `tool_use`.
+const QUESTION_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
+
+/// The status words Claude publishes when it is parked on the owner. `needs_input` is the CLI's
+/// documented word; `blocked` and `permission` come from its binary; `waiting` is in the
+/// contract's table. All four mean the same thing here.
+const CLAUDE_PERMISSION_WORDS: [&str; 4] = ["needs_input", "blocked", "permission", "waiting"];
+
+/// What a Claude transcript tail says about the owner, split into the three cases so the shared
+/// [`WaitPolicy`] can order them. A single `LiveState` could not distinguish a question from an
+/// interruption, which is exactly the conflation this module exists to remove.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ClaudeTailFacts {
+    /// Claude's own `interruptedMessageId` record is the newest user record: the owner cut the
+    /// turn short and Claude is back at its prompt.
+    pub interrupted: bool,
+    /// The newest assistant record ends on an `AskUserQuestion`/`ExitPlanMode` `tool_use` with no
+    /// tool result after it. The engine is parked until an answer arrives.
+    pub question_outstanding: bool,
+    /// The newest record is an assistant tool call, or an owner message: the turn appears open.
+    pub open: bool,
+    /// The newest assistant record is a plain text reply: the turn is finished.
+    pub finished: bool,
+}
+
+/// Claude's [`WaitPolicy`]: the engine's own status word for permission, and the transcript tail
+/// for questions and interruptions.
+///
+/// **What it cannot see, stated plainly.** Claude's `idle` word can appear while a question is
+/// outstanding; the tail is consulted for that, which is why `question()` is not gated on the
+/// word. An `idle` with a tail that plainly finished is ordinary waiting, not a wait on the owner.
+pub struct ClaudeWait<'a> {
+    word: &'a str,
+    tail: Option<&'a ClaudeTailFacts>,
+}
+
+impl<'a> ClaudeWait<'a> {
+    pub fn new(word: &'a str, tail: Option<&'a ClaudeTailFacts>) -> Self {
+        Self { word, tail }
+    }
+
+    /// The turn state once the three owner cases are set aside: running, waiting, or unknown.
+    ///
+    /// A stale `busy` still yields to a transcript that plainly finished — the one word the tail
+    /// may close. An `idle` is ordinary waiting; the policy has already taken any outstanding
+    /// question out of it. An unrecognised word is unknown unless the tail can say otherwise, and
+    /// the word itself survives in `raw_word` either way.
+    pub fn turn_state(&self) -> LiveState {
+        let tail = self.tail;
+        match self.word {
+            "busy" | "running" => {
+                if tail.is_some_and(|t| t.finished) {
+                    LiveState::Waiting
+                } else {
+                    LiveState::Running
+                }
+            }
+            "idle" => LiveState::Waiting,
+            _ => match tail {
+                Some(t) if t.open => LiveState::Running,
+                Some(t) if t.finished => LiveState::Waiting,
+                _ => LiveState::Unknown,
+            },
+        }
+    }
+
+    /// Whether the engine's own word is one Pigeon recognises at all. An unrecognised word is
+    /// drift to surface, not to discard.
+    pub fn word_is_known(&self) -> bool {
+        matches!(
+            self.word,
+            "busy" | "running" | "idle" | "needs_input" | "blocked" | "permission" | "waiting"
+        )
+    }
+}
+
+impl WaitPolicy for ClaudeWait<'_> {
+    fn permission(&self) -> Option<WaitSignal> {
+        if CLAUDE_PERMISSION_WORDS.contains(&self.word) {
+            return Some(
+                WaitSignal::new(OwnerWait::Permission)
+                    .word(self.word)
+                    .because(format!(
+                        "Claude Code publishes status \"{}\", which parks it on the owner",
+                        self.word
+                    )),
+            );
+        }
+        None
+    }
+
+    fn question(&self) -> Option<WaitSignal> {
+        if self.tail.is_some_and(|t| t.question_outstanding) {
+            return Some(
+                WaitSignal::new(OwnerWait::Question).because(
+                    "Claude's transcript ends on an unanswered AskUserQuestion or ExitPlanMode"
+                        .to_string(),
+                ),
+            );
+        }
+        None
+    }
+
+    fn interruption(&self) -> Option<WaitSignal> {
+        if self.tail.is_some_and(|t| t.interrupted) {
+            return Some(
+                WaitSignal::new(OwnerWait::Interruption).because(
+                    "Claude's transcript records interruptedMessageId, so the turn was cut short"
+                        .to_string(),
+                ),
+            );
+        }
+        None
+    }
+}
+
+/// Find the depth-one transcript for a Claude session and split its tail into the three owner
+/// cases plus the running/finished turn shape.
+///
+/// Missing or unreadable transcript evidence is `None` deliberately: older installations without
+/// project transcripts stay observable from the status word alone, and the policy then answers
+/// only what the word can.
+pub fn claude_tail_facts(root: &Path, sid: &str) -> Option<ClaudeTailFacts> {
+    let entries = std::fs::read_dir(root).ok()?;
+    let mut transcript = None;
+    for entry in entries.flatten() {
+        let candidate = entry.path().join(format!("{sid}.jsonl"));
+        if candidate.is_file() {
+            transcript = Some(candidate);
+            break;
+        }
+    }
+    let transcript = transcript?;
+    let tail = read_tail(&transcript, 64 * 1024).ok()?;
+    Some(classify_claude_tail(&tail))
+}
+
+/// Walk a transcript tail backwards and classify the newest record.
+///
+/// Set when a tool result is the newest thing seen, so the assistant record just before it is a
+/// call that has been ANSWERED. Scanning backwards, the result arrives first.
+fn classify_claude_tail(tail: &str) -> ClaudeTailFacts {
+    let mut answered = false;
+    let mut facts = ClaudeTailFacts::default();
+    for line in tail.lines().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            // The tail can begin mid-record, and the last record can be half-written while Claude
+            // is streaming. Neither malformed fragment is evidence about the current turn.
+            continue;
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("user") if value.get("interruptedMessageId").is_some() => {
+                facts.interrupted = true;
+                return facts;
+            }
+            Some("assistant") => {
+                let names: Vec<&str> = value
+                    .get("message")
+                    .and_then(|m| m.get("content"))
+                    .and_then(Value::as_array)
+                    .map(|blocks| {
+                        blocks
+                            .iter()
+                            .filter(|block| {
+                                block.get("type").and_then(Value::as_str) == Some("tool_use")
+                            })
+                            .filter_map(|block| block.get("name").and_then(Value::as_str))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                // A question left outstanding is the engine parked on the owner.
+                if !answered && names.iter().any(|name| QUESTION_TOOLS.contains(name)) {
+                    facts.question_outstanding = true;
+                } else if !names.is_empty() {
+                    facts.open = true;
+                } else {
+                    facts.finished = true;
+                }
+                return facts;
+            }
+            Some("user") if !claude_user_record_is_plumbing(&value) => {
+                facts.open = true;
+                return facts;
+            }
+            // A plumbing user record is a tool result: it answers the call just before it.
+            Some("user") => answered = true,
+            _ => {}
+        }
+    }
+    facts
+}
+
+fn claude_user_record_is_plumbing(value: &Value) -> bool {
+    if value.get("isCompactSummary").and_then(Value::as_bool) == Some(true) {
+        return true;
+    }
+    if value
+        .get("origin")
+        .and_then(|origin| origin.get("kind"))
+        .and_then(Value::as_str)
+        == Some("task-notification")
+    {
+        return true;
+    }
+    value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+        .is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        })
+}
+
+/// Read at most `bytes` from the end of a file. Read-only, never locked: a transcript belongs to
+/// the engine and Pigeon is a guest in it.
+fn read_tail(path: &Path, bytes: u64) -> std::io::Result<String> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = File::open(path)?;
+    let len = file.metadata()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(bytes)))?;
+    let mut buf = Vec::with_capacity(bytes.min(len) as usize);
+    file.take(bytes).read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+// ------------------------------------------------------------------------------------------- //
 
 #[cfg(test)]
 mod tests {
@@ -2354,5 +2587,123 @@ mod tests {
             );
             assert!(m.api_calls > 0, "a multi-megabyte transcript has API calls");
         }
+    }
+
+    // -- The three owner cases, through the shared policy ---------------------------------------
+
+    #[test]
+    fn claude_permission_words_are_the_permission_case() {
+        for word in CLAUDE_PERMISSION_WORDS {
+            let signal = ClaudeWait::new(word, None)
+                .owner_wait()
+                .expect("the word is a wait on the owner");
+            assert_eq!(signal.case, OwnerWait::Permission, "word {word}");
+            assert_eq!(signal.case.state(), LiveState::NeedsYou);
+            assert_eq!(signal.raw_word.as_deref(), Some(word));
+        }
+        // `busy` and `idle` are ordinary turn words and must not become a permission.
+        assert!(ClaudeWait::new("busy", None).permission().is_none());
+        assert!(ClaudeWait::new("idle", None).permission().is_none());
+    }
+
+    #[test]
+    fn an_unanswered_question_tool_is_the_question_case() {
+        let facts = classify_claude_tail(concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"AskUserQuestion"}]}}"#,
+            "\n",
+        ));
+        assert!(facts.question_outstanding, "an unanswered question is seen");
+        let signal = ClaudeWait::new("idle", Some(&facts))
+            .owner_wait()
+            .expect("a question outranks idle");
+        assert_eq!(signal.case, OwnerWait::Question);
+        assert_eq!(signal.case.state(), LiveState::NeedsYou);
+    }
+
+    #[test]
+    fn an_answered_question_tool_is_not_a_wait() {
+        // The result arrives after the call, so scanning backwards it is seen first.
+        let facts = classify_claude_tail(concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"AskUserQuestion"}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"yes"}]}}"#,
+            "\n",
+        ));
+        assert!(
+            !facts.question_outstanding,
+            "the answer closes the question"
+        );
+        assert!(ClaudeWait::new("idle", Some(&facts)).question().is_none());
+    }
+
+    #[test]
+    fn an_interrupted_turn_is_the_interruption_case_and_reads_waiting() {
+        let facts = classify_claude_tail(concat!(
+            r#"{"type":"user","interruptedMessageId":"msg_1"}"#,
+            "\n",
+        ));
+        assert!(facts.interrupted);
+        let signal = ClaudeWait::new("busy", Some(&facts))
+            .owner_wait()
+            .expect("an interrupt is a wait");
+        assert_eq!(signal.case, OwnerWait::Interruption);
+        assert_eq!(signal.case.state(), LiveState::Waiting);
+    }
+
+    #[test]
+    fn permission_outranks_a_question_which_outranks_an_interruption_for_claude() {
+        let facts = ClaudeTailFacts {
+            interrupted: true,
+            question_outstanding: true,
+            open: false,
+            finished: false,
+        };
+        // The status word is the permission case, and it wins over the tail's question.
+        assert_eq!(
+            ClaudeWait::new("needs_input", Some(&facts))
+                .owner_wait()
+                .unwrap()
+                .case,
+            OwnerWait::Permission
+        );
+        // With no permission word, the question wins over the interruption.
+        assert_eq!(
+            ClaudeWait::new("idle", Some(&facts))
+                .owner_wait()
+                .unwrap()
+                .case,
+            OwnerWait::Question
+        );
+        // With neither, the interruption stands.
+        let only_interrupt = ClaudeTailFacts {
+            interrupted: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            ClaudeWait::new("busy", Some(&only_interrupt))
+                .owner_wait()
+                .unwrap()
+                .case,
+            OwnerWait::Interruption
+        );
+    }
+
+    #[test]
+    fn a_busy_word_with_a_finished_tail_is_ordinary_waiting_not_a_wait_on_the_owner() {
+        let facts = ClaudeTailFacts {
+            finished: true,
+            ..Default::default()
+        };
+        let wait = ClaudeWait::new("busy", Some(&facts));
+        assert!(wait.owner_wait().is_none(), "no owner case is outstanding");
+        assert_eq!(wait.turn_state(), LiveState::Waiting);
+    }
+
+    #[test]
+    fn an_unknown_status_word_is_unknown_but_still_keeps_the_word() {
+        let wait = ClaudeWait::new("something-new", None);
+        assert!(wait.owner_wait().is_none());
+        assert!(!wait.word_is_known());
+        assert_eq!(wait.turn_state(), LiveState::Unknown);
     }
 }

@@ -518,11 +518,14 @@ that owned process.
   `blocked`, `permission`, `waiting`, `exited`); pigeon maps only `busy`/`running` → running,
   `needs_input`/`blocked`/`permission`/`waiting` → needs you, `idle` → finished, and shows any other
   word verbatim rather than guessing.
-- Codex approval prompts are not recorded in rollouts in any of the ten newest files sampled;
-  "waiting on you" for Codex therefore means "turn complete, process alive" until evidence of an
-  approval marker exists. Stated on the badge's hover text.
-- OpenCode's `permission` table had zero rows at measurement; its meaning as "pending approval" is
-  the natural reading of its schema and is to be confirmed the first time one appears.
+- Codex approval prompts are not recorded in rollouts, so Codex "needs you" is read from the
+  `PermissionRequest` hook (installed with consent, `docs/decisions/0002-codex-hooks.md`) and only
+  while the rollout turn is open. Codex questions (`request_user_input`) still have no hook event
+  and read **running**; stated on the badge's hover text.
+- OpenCode's `permission` table held zero rows during a measured live `external_directory` approval
+  (2026-09-18, an 8.6-minute wait): the table holds *saved rules*, and a pending ask lives only in
+  the running process. The event stream's pending part is the on-disk signal; a wait it does not
+  record reads **running**, and the owner-wait policy returns a stated absence rather than a guess.
 - Codex's `input_tokens` **includes** the cached portion; the studio subtracts it so the six
   counters carry Anthropic semantics (full prompt = input + cache read + cache write). Pigeon does
   the same, and fails loud if cached exceeds input.

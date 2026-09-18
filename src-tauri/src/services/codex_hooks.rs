@@ -26,7 +26,6 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use crate::api::errors::{EngineError, ErrorKind};
-use crate::domain::LiveState;
 
 /// The hook events Pigeon installs.
 ///
@@ -50,35 +49,51 @@ pub struct HookEvent {
     pub event_name: String,
 }
 
-/// What a hook event says the session is doing, or `None` when it says nothing this module should
-/// act on.
-///
-/// The mapping is deliberately narrow. It answers one question — "is the owner being waited on?" —
-/// and leaves the general running/idle call to the rollout tail, which is the richer source when a
-/// turn is actually in flight.
-pub fn state_for(event_name: &str) -> Option<LiveState> {
-    match event_name {
-        "PermissionRequest" => Some(LiveState::NeedsYou),
-        _ => None,
-    }
-}
-
 /// The newest event per session, from the tail of the event file.
 ///
-/// Unreadable file, missing file, and a file of unrecognised lines all answer the empty map. That
-/// is not a claim about Codex: the caller only ever *overrides* a rollout reading with what it
-/// finds here, so an empty map means "no hook evidence", never "nothing is running".
+/// **The file is not one JSON object per line.** Codex hands the hook its payload on stdin with
+/// no trailing newline, and the hook (`cat >>`) copies stdin verbatim, so successive events land
+/// as a run of `{...}{...}` with nothing between them. Measured on this Mac 2026-09-17: the
+/// installed hook had produced an 86 KB file holding 102 events and **zero** `\n`. Reading that
+/// with `lines()` yields one unparseable line, so every event was dropped and a Codex parked on a
+/// permission request still read `Running` — the exact lie this module exists to prevent. The
+/// stream is therefore parsed as a stream of concatenated JSON values, which subsumes JSONL too.
+///
+/// Unreadable file, missing file, and a file of unrecognised records all answer the empty map.
+/// That is not a claim about Codex: the caller only ever *overrides* a rollout reading with what
+/// it finds here, so an empty map means "no hook evidence", never "nothing is running".
 pub fn latest_by_session(path: &Path) -> BTreeMap<String, HookEvent> {
     let Ok(text) = read_tail(path, EVENT_TAIL_BYTES) else {
         return BTreeMap::new();
     };
     let mut out: BTreeMap<String, HookEvent> = BTreeMap::new();
-    for line in text.lines() {
-        let Some(event) = parse_line(line) else {
-            continue;
-        };
-        // Last write wins: lines are in append order, so a later line is a later fact.
-        out.insert(event.session_id.clone(), event);
+    let mut rest = text.as_str();
+    loop {
+        let mut stream = serde_json::Deserializer::from_str(rest).into_iter::<serde_json::Value>();
+        match stream.next() {
+            Some(Ok(value)) => {
+                let consumed = stream.byte_offset();
+                // Last write wins: records are in append order, so a later one is a later fact.
+                if let Some(event) = event_from_value(&value) {
+                    out.insert(event.session_id.clone(), event);
+                }
+                // A successful parse always consumes bytes, so this cannot loop forever.
+                rest = &rest[consumed..];
+            }
+            // The tail starts at an arbitrary offset, so the first record is often torn. So is a
+            // record whose JSON is genuinely malformed. Either way, resynchronise on the next
+            // `{` and keep going: the events behind a clipped one still describe the present. A
+            // failed parse consumes at least one byte, so this terminates.
+            Some(Err(_)) => {
+                let consumed = stream.byte_offset().max(1);
+                let from = consumed.min(rest.len());
+                match rest[from..].find('{') {
+                    Some(open) => rest = &rest[from + open..],
+                    None => break,
+                }
+            }
+            None => break,
+        }
     }
     out
 }
@@ -93,12 +108,23 @@ pub fn events_path() -> PathBuf {
 
 /// One JSONL record. Unknown fields are ignored; the two fields this module needs are `session_id`
 /// and `hook_event_name`. A line missing either is not an event and is skipped rather than guessed.
+///
+/// Only the tests call this: the live reader parses the concatenated stream, which needs the
+/// deserializer rather than a per-line split. It stays as the smallest statement of "what a
+/// record is" and is pinned against a payload captured from a real Codex run.
+#[cfg(test)]
 fn parse_line(line: &str) -> Option<HookEvent> {
     let line = line.trim();
     if !line.starts_with('{') {
         return None;
     }
     let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    event_from_value(&value)
+}
+
+/// One decoded hook payload. The two fields this module needs are `session_id` and
+/// `hook_event_name`; a record missing either is not an event and is skipped rather than guessed.
+fn event_from_value(value: &serde_json::Value) -> Option<HookEvent> {
     let session_id = value.get("session_id")?.as_str()?.trim();
     let event_name = value.get("hook_event_name")?.as_str()?.trim();
     if session_id.is_empty() || event_name.is_empty() {
@@ -472,17 +498,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_permission_request_means_the_owner_is_being_waited_on() {
-        assert_eq!(state_for("PermissionRequest"), Some(LiveState::NeedsYou));
-        // The events that clear it must NOT claim a state of their own; the rollout tail is the
-        // better source for "running", and overriding it here is how the badge would start lying.
-        assert_eq!(state_for("PreToolUse"), None);
-        assert_eq!(state_for("Stop"), None);
-        assert_eq!(state_for("SessionStart"), None);
-        assert_eq!(state_for("something-new"), None);
-    }
-
-    #[test]
     fn the_last_event_for_a_session_wins_because_the_file_is_append_order() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_events(
@@ -517,6 +532,64 @@ mod tests {
         let events = latest_by_session(&path);
         assert_eq!(events.len(), 1);
         assert_eq!(events["a"].event_name, "PermissionRequest");
+    }
+
+    /// The file is a run of `{...}{...}` with no newlines, because Codex sends each payload on
+    /// stdin with no trailing newline and the hook copies stdin verbatim. Measured on this Mac
+    /// 2026-09-17: 102 events, zero `\n`. A `lines()` reader sees one unparseable line and loses
+    /// every event, which is why a Codex on a permission request still read `Running`.
+    #[test]
+    fn concatenated_events_with_no_newlines_are_all_read_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = concat!(
+            r#"{"session_id":"b","hook_event_name":"PermissionRequest","tool_name":"Bash"}"#,
+            r#"{"session_id":"a","hook_event_name":"PreToolUse"}"#,
+            r#"{"session_id":"b","hook_event_name":"Stop"}"#,
+        );
+        assert_eq!(raw.matches('\n').count(), 0, "the fixture has no newlines");
+        let path = dir.path().join("codex-hook-events.jsonl");
+        std::fs::write(&path, raw).unwrap();
+
+        let events = latest_by_session(&path);
+        assert_eq!(events.len(), 2, "both sessions are seen: {events:?}");
+        assert_eq!(events["a"].event_name, "PreToolUse");
+        // Append order decides the winner: b's Stop supersedes its PermissionRequest.
+        assert_eq!(events["b"].event_name, "Stop");
+    }
+
+    /// An event whose own payload contains braces and quoted braces must not split the stream.
+    #[test]
+    fn a_record_whose_payload_contains_braces_still_parses() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = concat!(
+            r#"{"session_id":"a","hook_event_name":"PermissionRequest","#,
+            r#""tool_input":{"command":"echo '{ \"x\": 1 }' && printf '}'"}}"#,
+            r#"{"session_id":"a","hook_event_name":"PreToolUse"}"#,
+        );
+        let path = dir.path().join("codex-hook-events.jsonl");
+        std::fs::write(&path, raw).unwrap();
+
+        let events = latest_by_session(&path);
+        assert_eq!(events["a"].event_name, "PreToolUse");
+    }
+
+    /// The tail is read from an arbitrary offset, so its first record is often clipped. The
+    /// records after it still describe the present and must not be lost with it.
+    #[test]
+    fn a_tail_that_begins_mid_record_still_reads_the_records_after_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = concat!(
+            r#""transcript_path":"/tmp/r.jsonl","hook_event_name":"Stop"}"#,
+            r#"{"session_id":"a","hook_event_name":"PermissionRequest"}"#,
+            r#"{"session_id":"b","hook_event_name":"Stop"}"#,
+        );
+        let path = dir.path().join("codex-hook-events.jsonl");
+        std::fs::write(&path, raw).unwrap();
+
+        let events = latest_by_session(&path);
+        assert_eq!(events.len(), 2, "the clipped record hid nobody: {events:?}");
+        assert_eq!(events["a"].event_name, "PermissionRequest");
+        assert_eq!(events["b"].event_name, "Stop");
     }
 
     #[test]

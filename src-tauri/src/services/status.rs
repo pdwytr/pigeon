@@ -71,14 +71,15 @@
 //! one read or one store; the refresh runs entirely outside it.
 
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::adapters::wait::WaitPolicy;
+use crate::adapters::{claude, codex};
 use crate::api::errors::{EngineError, ErrorDetail, ErrorKind};
 use crate::cache::Cached;
 use crate::domain::{
@@ -461,13 +462,6 @@ const SNAPSHOT_TTL: Duration = Duration::from_secs(1);
 const STOP_GRACE: Duration = Duration::from_millis(2_000);
 const STOP_POLL: Duration = Duration::from_millis(100);
 
-/// How much of a rollout is read at a time while finding the last turn marker.
-///
-/// Codex can append megabytes of tool output after `task_started`. A fixed tail window therefore
-/// turns a healthy, actively working session into `Unknown`. The reader walks backwards in chunks
-/// so memory stays bounded while the search remains correct for arbitrarily long turns.
-const ROLLOUT_SCAN_CHUNK_BYTES: u64 = 1024 * 1024;
-
 /// Reads host process facts and turns them into live observations.
 ///
 /// Synchronous and cheap by construction, so it can be called from `spawn_blocking`.
@@ -726,43 +720,39 @@ impl StatusService {
             ];
             // The lock proves a process is *attached*. Whether it is working or waiting comes from
             // the rollout, and if there is no rollout the honest answer is Unknown.
-            let (mut state, since_ms, mut raw_word) = match rollout.as_deref().and_then(codex_turn)
-            {
-                Some((CodexTurn::Open, ts)) => {
+            let turn = rollout.as_deref().and_then(codex::codex_turn);
+            let since_ms = turn.as_ref().and_then(|(_, ts)| *ts);
+            match turn.as_ref().map(|(marker, _)| marker) {
+                Some(codex::CodexTurn::Open) => {
                     evidence.push(note(
                         "its rollout's last turn record is task_started".into(),
                     ));
-                    (LiveState::Running, ts, Some("task_started".to_string()))
                 }
-                Some((CodexTurn::Closed(word), ts)) => {
+                Some(codex::CodexTurn::Closed(word)) => {
                     evidence.push(note(format!("its rollout's last turn record is {word}")));
-                    (LiveState::Waiting, ts, Some(word))
                 }
-                None => {
-                    evidence.push(note(
-                        "no turn record in the tail of its rollout, so its state is unreadable"
-                            .into(),
-                    ));
-                    (LiveState::Unknown, None, None)
-                }
-            };
+                None => evidence.push(note(
+                    "no turn record in the tail of its rollout, so its state is unreadable".into(),
+                )),
+            }
             // **The rollout cannot see an approval.** A Codex paused on an approval prompt still
             // has an open `task_started`, so the tail above says Running for a session that is
             // waiting on a human. The hook is the only source that knows, and it is allowed to
             // overrule the tail — but only a RUNNING reading, so a hook line left over from an
             // earlier turn can never resurrect a session Codex has already finished.
-            if state == LiveState::Running {
-                if let Some(event) = hook_events.get(&thread) {
-                    if let Some(hook_state) = codex_hooks::state_for(&event.event_name) {
-                        evidence.push(note(format!(
-                            "its {} hook fired, which the rollout cannot record",
-                            event.event_name
-                        )));
-                        state = hook_state;
-                        raw_word = Some(event.event_name.clone());
+            let hook_event = hook_events
+                .get(&thread)
+                .map(|event| event.event_name.as_str());
+            let wait = codex::CodexWait::new(turn.as_ref().map(|(marker, _)| marker), hook_event);
+            let (state, raw_word) = match wait.owner_wait() {
+                Some(signal) => {
+                    if let Some(reason) = signal.evidence {
+                        evidence.push(note(reason));
                     }
+                    (signal.case.state(), signal.raw_word)
                 }
-            }
+                None => (wait.turn_state(), wait.turn_word()),
+            };
             out.live.push(LiveObservation {
                 key: SessionKey::new(ProviderId::Codex, thread),
                 process: ProcessPresence::Present,
@@ -1129,29 +1119,6 @@ fn collapse(mut raw: Vec<LiveObservation>) -> Vec<LiveObservation> {
     out
 }
 
-/// Map Claude Code's own status word. `busy` is the engine working; `idle` means it has finished
-/// and is sitting at its prompt, which is ordinary waiting; `needs_input`, `blocked` and
-/// `permission` are the engine saying it is **parked on the owner**, which is
-/// [`LiveState::NeedsYou`]. Anything else is [`LiveState::Unknown`] **with the word kept** — a new
-/// word is drift to surface, not to discard.
-///
-/// `needs_input` used to be `Unknown` on the reasoning that an uncertain input state should not be
-/// promoted. That was wrong in the same way the Codex and OpenCode readings were: a Claude sitting
-/// on `AskUserQuestion` leaves a trailing `tool_use`, so the transcript tail says `Running`, and an
-/// agent waiting on a person was shown as working. The word is not uncertain — Claude states it —
-/// so it is now read as what it says.
-/// The words are `frds.md`'s status table, rows 3 and 4, and nothing here is invented: `busy`
-/// **and** `running` are both the engine working, and `waiting` sits with the urgent words because
-/// the contract puts it there.
-fn claude_state(word: &str) -> LiveState {
-    match word {
-        "busy" | "running" => LiveState::Running,
-        "idle" => LiveState::Waiting,
-        "needs_input" | "blocked" | "permission" | "waiting" => LiveState::NeedsYou,
-        _ => LiveState::Unknown,
-    }
-}
-
 /// One `~/.claude/sessions/<pid>.json`.
 ///
 /// `Err(field)` means the shape drifted; `Ok(None)` means the pid is not alive, which is the
@@ -1209,33 +1176,31 @@ fn claude_observation(
             "Claude Code publishes status \"{word}\" for pid {pid}"
         )),
     ];
-    let published_state = claude_state(word);
-    let transcript_state = claude_transcript_state(projects_root, sid);
-    let state = match published_state {
-        // The engine's own urgent words are statements about the process that the tail cannot
-        // make, so nothing overrides them.
-        LiveState::NeedsYou => LiveState::NeedsYou,
-        // **`idle` is ordinary waiting — unless the tail ends on a question the owner has not
-        // answered.** `frds.md` row 5 / T-19.4: Claude can reach `idle` while a terminal
-        // `AskUserQuestion` or `ExitPlanMode` is still outstanding, and that is needs-you, not
-        // finished. Every other `idle` is the interruption case — the engine parked after the
-        // owner's message with no response yet — where the tail must not reopen the turn.
-        LiveState::Waiting => match transcript_state {
-            Some(LiveState::NeedsYou) => LiveState::NeedsYou,
-            _ => LiveState::Waiting,
-        },
-        // `busy` is the one word the tail may close, so a stale `busy` still yields to a transcript
-        // that plainly finished — or to a question the owner has not answered.
-        LiveState::Running => transcript_state.unwrap_or(LiveState::Running),
-        // An unrecognised word: the tail is the only evidence there is, and the word itself
-        // survives in `raw_word` either way.
-        LiveState::Unknown => transcript_state.unwrap_or(LiveState::Unknown),
+    // The three owner cases (permission, question, interruption) are resolved by the adapter's
+    // shared policy before the ordinary running/waiting/unknown turn call. Every engine reaches
+    // this decision through the same `WaitPolicy`, so none of them can quietly skip a case.
+    let tail = claude::claude_tail_facts(projects_root, sid);
+    let wait = claude::ClaudeWait::new(word, tail.as_ref());
+    let (state, raw_word) = match wait.owner_wait() {
+        Some(signal) => {
+            if let Some(reason) = signal.evidence {
+                evidence.push(note(reason));
+            }
+            (
+                signal.case.state(),
+                signal.raw_word.unwrap_or_else(|| word.to_string()),
+            )
+        }
+        None => {
+            let state = wait.turn_state();
+            if state == LiveState::Unknown {
+                evidence.push(note(format!(
+                    "\"{word}\" is not a status word Pigeon recognises, so its state is unknown"
+                )));
+            }
+            (state, word.to_string())
+        }
     };
-    if state == LiveState::Unknown {
-        evidence.push(note(format!(
-            "\"{word}\" is not a status word Pigeon recognises, so its state is unknown"
-        )));
-    }
     let since_ms = value
         .get("statusUpdatedAt")
         .or_else(|| value.get("updatedAt"))
@@ -1247,115 +1212,12 @@ fn claude_observation(
         state,
         since_ms,
         // The engine's own word, quoted back rather than translated away.
-        raw_word: Some(word.to_string()),
+        raw_word: Some(raw_word),
         evidence,
         pid: Some(pid),
         console_id: None,
         observed_at_ms: now_ms(),
     }))
-}
-
-/// Find the depth-one transcript for a Claude session and classify its current tail.
-///
-/// The process status file is useful evidence, but its `busy` word can outlive the turn it
-/// describes. The transcript tail can close that stale `busy`: a trailing assistant text message
-/// or Claude's explicit `interruptedMessageId` record means Claude is waiting. A trailing owner
-/// message or tool call means the turn appears open, except that it never promotes the process's
-/// explicit `idle` back to running—an early interruption can leave only that owner record behind.
-/// Missing or unreadable transcript evidence deliberately falls back to the engine word so older
-/// installations without project transcripts remain observable.
-fn claude_transcript_state(root: &Path, sid: &str) -> Option<LiveState> {
-    let entries = std::fs::read_dir(root).ok()?;
-    let mut transcript = None;
-    for entry in entries.flatten() {
-        let candidate = entry.path().join(format!("{sid}.jsonl"));
-        if candidate.is_file() {
-            transcript = Some(candidate);
-            break;
-        }
-    }
-    let transcript = transcript?;
-    let tail = read_tail(&transcript, 64 * 1024).ok()?;
-    // Set when a tool result is the newest thing we have seen, so the assistant record just before
-    // it is a call that has been ANSWERED. Scanning backwards, the result arrives first.
-    let mut answered = false;
-    for line in tail.lines().rev() {
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line.trim()) else {
-            // The tail can begin mid-record, and the last record can be half-written while Claude
-            // is streaming. Neither malformed fragment is evidence about the current turn.
-            continue;
-        };
-        match value.get("type").and_then(serde_json::Value::as_str) {
-            Some("user") if value.get("interruptedMessageId").is_some() => {
-                return Some(LiveState::Waiting);
-            }
-            Some("assistant") => {
-                let blocks = value.get("message").and_then(|m| m.get("content"));
-                let names: Vec<&str> = blocks
-                    .and_then(serde_json::Value::as_array)
-                    .map(|blocks| {
-                        blocks
-                            .iter()
-                            .filter(|block| {
-                                block.get("type").and_then(serde_json::Value::as_str)
-                                    == Some("tool_use")
-                            })
-                            .filter_map(|block| {
-                                block.get("name").and_then(serde_json::Value::as_str)
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                // **A question left outstanding is the engine parked on the owner** — the one tail
-                // shape that means needs-you rather than running (`frds.md` row 5, T-19.4).
-                if !answered && names.iter().any(|name| QUESTION_TOOLS.contains(name)) {
-                    return Some(LiveState::NeedsYou);
-                }
-                if !names.is_empty() {
-                    return Some(LiveState::Running);
-                }
-                return Some(LiveState::Waiting);
-            }
-            Some("user") if !claude_user_record_is_plumbing(&value) => {
-                return Some(LiveState::Running);
-            }
-            // A plumbing user record is a tool result: it answers the call just before it.
-            Some("user") => answered = true,
-            _ => {}
-        }
-    }
-    None
-}
-
-/// The tools Claude parks on the owner with. `frds.md` row 5 names both, and the name is the only
-/// signal the transcript carries — the record shape is an ordinary `tool_use`.
-const QUESTION_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
-
-fn claude_user_record_is_plumbing(value: &serde_json::Value) -> bool {
-    if value
-        .get("isCompactSummary")
-        .and_then(serde_json::Value::as_bool)
-        == Some(true)
-    {
-        return true;
-    }
-    if value
-        .get("origin")
-        .and_then(|origin| origin.get("kind"))
-        .and_then(serde_json::Value::as_str)
-        == Some("task-notification")
-    {
-        return true;
-    }
-    value
-        .get("message")
-        .and_then(|message| message.get("content"))
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|blocks| {
-            blocks.iter().any(|block| {
-                block.get("type").and_then(serde_json::Value::as_str) == Some("tool_result")
-            })
-        })
 }
 
 /// `…/thread-writer-locks/01a0963c-e907-7372-85be-d56b6669b13a.lock` → the thread id, **whole**.
@@ -1385,139 +1247,6 @@ struct CodexFiles {
 struct CodexLock {
     thread: String,
     path: PathBuf,
-}
-
-/// Whether the rollout's last turn is open or closed.
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum CodexTurn {
-    Open,
-    /// Carries the engine's own word: `task_complete` or `turn_aborted`.
-    Closed(String),
-}
-
-/// Walk a rollout backwards and find the last turn marker.
-///
-/// **Why this is reliable enough to use.** Across the 9.9 MB rollout measured 2026-09-13 the
-/// markers pair exactly: 50 `task_started` against 37 `task_complete` + 13 `turn_aborted` = 50.
-/// Every started turn is closed by one of the two, so "the last marker is `task_started`" means a
-/// turn is genuinely open and "the last marker is a close" means Codex is back at its prompt.
-///
-/// **What it cannot see, stated plainly.** That rollout contained **no** approval or permission
-/// event of any kind — grepping it for `*approval*` returned zero. So a Codex process paused on a
-/// mid-turn approval prompt still reads as `Running` here. That is the one place this mapping is
-/// optimistic, and it is a gap in what Codex writes, not a guess we chose to make.
-fn codex_turn(rollout: &Path) -> Option<(CodexTurn, Option<i64>)> {
-    let mut file = File::open(rollout).ok()?;
-    let mut end = file.metadata().ok()?.len();
-    let mut boundary = Vec::new();
-
-    while end > 0 {
-        let start = end.saturating_sub(ROLLOUT_SCAN_CHUNK_BYTES);
-        let amount = (end - start) as usize;
-        file.seek(SeekFrom::Start(start)).ok()?;
-        let mut bytes = vec![0; amount];
-        file.read_exact(&mut bytes).ok()?;
-        bytes.extend_from_slice(&boundary);
-        let text = String::from_utf8_lossy(&bytes);
-        let lines: Vec<&str> = text.lines().collect();
-
-        // Reverse, so the first match is the last record. The first line is split at the chunk
-        // boundary when start > 0; carry that line into the next earlier chunk before parsing it.
-        for (index, line) in lines.iter().enumerate().rev() {
-            if start > 0 && index == 0 {
-                continue;
-            }
-            let line = line.trim();
-            if !line.starts_with('{') {
-                continue;
-            }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            let kind = value
-                .get("payload")
-                .and_then(|p| p.get("type"))
-                .and_then(|t| t.as_str());
-            let turn = match kind {
-                Some("task_started") => CodexTurn::Open,
-                Some(word @ ("task_complete" | "turn_aborted")) => {
-                    CodexTurn::Closed(word.to_string())
-                }
-                _ => continue,
-            };
-            let ts = value
-                .get("timestamp")
-                .and_then(|t| t.as_str())
-                .and_then(iso8601_ms);
-            return Some((turn, ts));
-        }
-
-        if start == 0 {
-            break;
-        }
-        boundary = lines
-            .first()
-            .map(|line| line.as_bytes().to_vec())
-            .unwrap_or_default();
-        end = start;
-    }
-    None
-}
-
-/// Read at most `bytes` from the end of a file. Read-only, never locked: a rollout belongs to the
-/// engine and Pigeon is a guest in it.
-fn read_tail(path: &Path, bytes: u64) -> std::io::Result<String> {
-    let mut file = File::open(path)?;
-    let len = file.metadata()?.len();
-    file.seek(SeekFrom::Start(len.saturating_sub(bytes)))?;
-    let mut buf = Vec::with_capacity(bytes.min(len) as usize);
-    file.take(bytes).read_to_end(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
-/// `2026-09-13T21:04:17.468Z` → epoch milliseconds.
-///
-/// Hand-rolled because the crate carries no date library and this is the only place that needs
-/// one. **A string with a numeric UTC offset is rejected rather than misread**: Codex writes `Z`,
-/// and silently treating `+01:00` as UTC would put a turn an hour in the past.
-fn iso8601_ms(raw: &str) -> Option<i64> {
-    let bytes = raw.as_bytes();
-    if bytes.len() < 20 || !raw.ends_with('Z') {
-        return None;
-    }
-    if bytes[4] != b'-' || bytes[7] != b'-' || (bytes[10] != b'T' && bytes[10] != b' ') {
-        return None;
-    }
-    if bytes[13] != b':' || bytes[16] != b':' {
-        return None;
-    }
-    let num = |range: std::ops::Range<usize>| raw.get(range)?.parse::<i64>().ok();
-    let year = num(0..4)?;
-    let month = num(5..7)?;
-    let day = num(8..10)?;
-    let hour = num(11..13)?;
-    let minute = num(14..16)?;
-    let second = num(17..19)?;
-    let milli = if bytes[19] == b'.' { num(20..23)? } else { 0 };
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    if hour > 23 || minute > 59 || second > 60 {
-        return None;
-    }
-    let days = days_from_civil(year, month, day);
-    Some((days * 86_400 + hour * 3_600 + minute * 60 + second) * 1_000 + milli)
-}
-
-/// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's `days_from_civil`).
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let year_of_era = year - era * 400;
-    let month_shifted = (month + 9) % 12;
-    let day_of_year = (153 * month_shifted + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
 }
 
 #[cfg(test)]
@@ -2026,7 +1755,7 @@ mod tests {
             "a closed turn means Codex is at its prompt"
         );
         assert_eq!(obs.raw_word.as_deref(), Some("task_complete"));
-        assert_eq!(obs.since_ms, iso8601_ms("2026-09-13T21:04:17.468Z"));
+        assert_eq!(obs.since_ms, Some(1_789_333_457_468));
     }
 
     /// A Codex holding an open turn and a `PermissionRequest` hook is **waiting on the owner**.
@@ -2644,76 +2373,6 @@ mod tests {
                 (38692, PathBuf::from("/Users/k/Projects/b")),
             ]
         );
-    }
-
-    #[test]
-    fn a_codex_turn_is_read_from_the_tail_and_an_offset_timestamp_is_refused() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("rollout.jsonl");
-        // Padding ahead of the markers, so the tail window is doing real work.
-        let mut body = String::new();
-        for _ in 0..400 {
-            body.push_str("{\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\"}}\n");
-        }
-        body.push_str(
-            "{\"timestamp\":\"2026-09-13T21:00:00.000Z\",\
-             \"payload\":{\"type\":\"task_started\"}}\n",
-        );
-        std::fs::write(&path, &body).expect("write");
-        assert_eq!(
-            codex_turn(&path),
-            Some((CodexTurn::Open, iso8601_ms("2026-09-13T21:00:00.000Z")))
-        );
-
-        body.push_str(
-            "{\"timestamp\":\"2026-09-13T21:04:17.468Z\",\
-             \"payload\":{\"type\":\"task_complete\"}}\n",
-        );
-        std::fs::write(&path, &body).expect("write");
-        let (turn, ts) = codex_turn(&path).expect("a closed turn");
-        assert_eq!(turn, CodexTurn::Closed("task_complete".into()));
-        assert_eq!(ts, iso8601_ms("2026-09-13T21:04:17.468Z"));
-
-        // No marker at all is Unknown, not a guess.
-        std::fs::write(&path, b"{\"payload\":{\"type\":\"reasoning\"}}\n").expect("write");
-        assert_eq!(codex_turn(&path), None);
-    }
-
-    #[test]
-    fn a_codex_turn_marker_survives_more_than_one_megabyte_of_following_output() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("rollout.jsonl");
-        let mut body = String::from(
-            "{\"timestamp\":\"2026-09-14T21:00:00.000Z\",\"payload\":{\"type\":\"task_started\"}}\n",
-        );
-        for _ in 0..30_000 {
-            body.push_str(
-                "{\"type\":\"response_item\",\"payload\":{\"type\":\"reasoning\",\"text\":\"output\"}}\n",
-            );
-        }
-        std::fs::write(&path, body).expect("write");
-
-        assert_eq!(
-            codex_turn(&path),
-            Some((CodexTurn::Open, iso8601_ms("2026-09-14T21:00:00.000Z")))
-        );
-    }
-
-    #[test]
-    fn iso_timestamps_convert_to_epoch_ms_and_a_zoned_one_is_refused() {
-        // 2026-09-13T21:04:17.468Z, cross-checked against the epoch arithmetic.
-        let ms = iso8601_ms("2026-09-13T21:04:17.468Z").expect("parses");
-        assert_eq!(ms, 1_789_333_457_468);
-        assert_eq!(iso8601_ms("1970-01-01T00:00:00.000Z"), Some(0));
-        assert_eq!(
-            iso8601_ms("2024-02-29T12:00:00.000Z"),
-            Some(1_709_208_000_000),
-            "leap day"
-        );
-        // Silently treating an offset as UTC would put a turn an hour in the past.
-        assert_eq!(iso8601_ms("2026-09-13T21:04:17.468+01:00"), None);
-        assert_eq!(iso8601_ms("not a timestamp"), None);
-        assert_eq!(iso8601_ms("2026-13-13T21:04:17.468Z"), None, "month 13");
     }
 
     #[test]

@@ -13,6 +13,9 @@
 pub mod claude;
 pub mod codex;
 pub mod opencode;
+pub mod wait;
+
+pub use wait::{OwnerWait, WaitPolicy, WaitSignal};
 
 use std::ffi::OsString;
 use std::path::PathBuf;
