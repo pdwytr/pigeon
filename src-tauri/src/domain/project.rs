@@ -20,7 +20,7 @@ pub struct StatusCounts {
 impl StatusCounts {
     pub fn add(&mut self, status: Option<SessionStatus>) {
         match status {
-            Some(SessionStatus::Running) => self.running += 1,
+            Some(SessionStatus::Running | SessionStatus::Delegating) => self.running += 1,
             Some(SessionStatus::NeedsYou) => self.needs_you += 1,
             Some(SessionStatus::Finished) => self.finished += 1,
             Some(SessionStatus::Unknown) => self.unknown += 1,

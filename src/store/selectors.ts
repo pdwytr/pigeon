@@ -84,7 +84,7 @@ function reconcileLiveRow(row: SessionRow, live: Map<string, SessionRow["status"
 export function statusCountsForRows(rows: SessionRow[]): StatusCounts {
   const counts: StatusCounts = { running: 0, needsYou: 0, finished: 0, unknown: 0 };
   for (const row of rows) {
-    if (row.status === "running") counts.running += 1;
+    if (row.status === "running" || row.status === "delegating") counts.running += 1;
     else if (row.status === "needs_you") counts.needsYou += 1;
     else if (row.status === "finished") counts.finished += 1;
     else counts.unknown += 1;

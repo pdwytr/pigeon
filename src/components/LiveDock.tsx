@@ -86,7 +86,13 @@ export function LiveDock({
                     <strong>{sessions.length}</strong> open agent
                   </span>
                   <span className="dock-running-count">
-                    {sessions.filter((session) => session.status === "running").length} running
+                    {
+                      sessions.filter(
+                        (session) =>
+                          session.status === "running" || session.status === "delegating",
+                      ).length
+                    }{" "}
+                    active
                   </span>
                 </span>
               ) : null}

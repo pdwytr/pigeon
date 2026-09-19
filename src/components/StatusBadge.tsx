@@ -8,6 +8,7 @@ import type { SessionStatus } from "../bindings";
 
 const WORDS: Record<SessionStatus, string> = {
   running: "running",
+  delegating: "delegating",
   needs_you: "needs you",
   finished: "idle",
   unknown: "unknown",

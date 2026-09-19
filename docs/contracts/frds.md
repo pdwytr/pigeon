@@ -384,10 +384,11 @@ with step data.
 `{type, key}` (here `opencode` and `opencode-go`). Pigeon reports provider names and `type` only;
 `key` is never deserialised. `SELECT email FROM account LIMIT 1` when the table has rows (0 here).
 
-**2.3.5 Live status.** Processes named `opencode`; cwd from the process table. A session is
-attached to a live process when its normalised `directory` equals the process cwd; when several
-sessions share the directory the most recently updated is the attached one and the others have
-no status. Turn state: the session's newest `message` with `role == "assistant"`: `data.time.
+**2.3.5 Live status.** Processes named `opencode`; cwd from the process table. Sessions sharing a
+directory are matched to the most recently active candidates up to the number of live processes,
+so one process cannot make every historical session appear live. When more than one process or
+candidate is involved, the session remains observable but its pid is null and stopping is refused as
+ambiguous. Turn state: the session's newest `message` with `role == "assistant"`: `data.time.
 completed` null → running; present (`finish` e.g. `stop`) → finished. `permission` rows whose
 `project_id` equals the session's project → **needs you** (0 rows at measurement; semantics to be
 confirmed at first occurrence, OQ-4).

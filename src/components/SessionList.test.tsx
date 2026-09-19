@@ -53,6 +53,12 @@ describe("a merged session list", () => {
     const rows = [
       makeRow({ sid: "a", title: "Working", status: "running", lastActiveMs: T0 }),
       makeRow({
+        sid: "delegating",
+        title: "Delegating",
+        status: "delegating",
+        lastActiveMs: T0 - 0.5,
+      }),
+      makeRow({
         provider: "codex",
         sid: "b",
         title: "Waiting",
@@ -78,6 +84,7 @@ describe("a merged session list", () => {
     render(<SessionList rows={rows} selectedKey={null} onSelect={() => {}} />);
 
     expect(screen.getByTestId("status-running")).toHaveTextContent("running");
+    expect(screen.getByTestId("status-delegating")).toHaveTextContent("delegating");
     expect(screen.getByTestId("status-needs_you")).toHaveTextContent("needs you");
     // A session the engine says nothing about is a stated absence, not "finished" and not blank —
     // and because the row carries its own aria-label, the absence has to be IN that label or a

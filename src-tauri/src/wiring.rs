@@ -4,6 +4,7 @@
 //! what makes the adapter contract's acceptance test meaningful: adding or removing an engine
 //! should touch `adapters/`, this file, and nothing else.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,8 +17,10 @@ use crate::services::status::{
     OpenCodeAttribution, OpenCodeAttributor, OpenCodeProcess, StatusService, StopOutcome,
 };
 
-/// Attributes a live OpenCode process to the newest non-archived session in the same directory.
-/// The directory is only used for identity; the adapter's database marker owns the state decision.
+/// Attributes live OpenCode work to the most recently active candidates in the same directory.
+/// OpenCode exposes no session id through its process table, so multiple matches remain explicitly
+/// ambiguous and carry no stoppable pid. We still surface as many sessions as there are processes;
+/// the old implementation assigned every process to one newest session and hid the others.
 struct HostOpenCodeAttributor {
     adapter: opencode::OpenCodeAdapter,
 }
@@ -40,33 +43,58 @@ impl OpenCodeAttributor for HostOpenCodeAttributor {
             return Err(problem);
         }
 
-        let mut attributed = Vec::new();
+        let mut by_cwd: BTreeMap<PathBuf, Vec<&OpenCodeProcess>> = BTreeMap::new();
         for process in processes {
-            let Some(cwd) = process.cwd.as_ref() else {
-                continue;
-            };
-            let Some(session) = report
+            if let Some(cwd) = process.cwd.as_ref() {
+                by_cwd.entry(cwd.clone()).or_default().push(process);
+            }
+        }
+
+        let mut attributed = Vec::new();
+        for (cwd, processes) in by_cwd {
+            let mut sessions: Vec<_> = report
                 .sessions
                 .iter()
-                .filter(|candidate| candidate.cwd.as_ref() == Some(cwd))
-                .max_by_key(|candidate| candidate.last_active_ms)
-            else {
-                continue;
-            };
-            let activity = self.adapter.read_activity(&session.key.sid)?;
-            let mut evidence = vec![format!(
-                "matched the newest OpenCode session in {}",
-                cwd.display()
-            )];
-            evidence.extend(activity.evidence);
-            attributed.push(OpenCodeAttribution {
-                pid: process.pid,
-                sid: session.key.sid.clone(),
-                state: activity.state,
-                since_ms: activity.since_ms.or(Some(session.last_active_ms)),
-                raw_word: activity.raw_word,
-                evidence,
-            });
+                .filter(|candidate| candidate.cwd.as_ref() == Some(&cwd))
+                .collect();
+            sessions.sort_by_key(|candidate| std::cmp::Reverse(candidate.last_active_ms));
+            let take = sessions.len().min(processes.len());
+            let ambiguous = processes.len() > 1 || sessions.len() > 1;
+            for session in sessions.into_iter().take(take) {
+                let activity = self.adapter.read_activity(&session.key.sid)?;
+                let active_subagents = self.adapter.active_subagents(&session.key.sid)?;
+                let state = if activity.state == crate::domain::LiveState::Waiting
+                    && active_subagents > 0
+                {
+                    crate::domain::LiveState::Delegating
+                } else {
+                    activity.state
+                };
+                let mut evidence = vec![if ambiguous {
+                    format!(
+                        "one of {} OpenCode processes may own this session in {}",
+                        processes.len(),
+                        cwd.display()
+                    )
+                } else {
+                    format!("matched the OpenCode process in {}", cwd.display())
+                }];
+                if active_subagents > 0 {
+                    evidence.push(format!(
+                        "OpenCode has {active_subagents} active child session(s) delegated from this session"
+                    ));
+                }
+                evidence.extend(activity.evidence);
+                attributed.push(OpenCodeAttribution {
+                    pid: (!ambiguous).then_some(processes[0].pid),
+                    sid: session.key.sid.clone(),
+                    state,
+                    since_ms: activity.since_ms.or(Some(session.last_active_ms)),
+                    raw_word: activity.raw_word,
+                    evidence,
+                    active_subagents,
+                });
+            }
         }
         Ok(attributed)
     }
