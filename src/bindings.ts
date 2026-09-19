@@ -43,8 +43,8 @@ export interface HostInfo {
 /** `live` = an engine process is open now. `recent` = closed inside the configured window. */
 export type Scope = "live" | "recent";
 
-export type SessionStatus = "running" | "needs_you" | "finished" | "unknown";
-export type LiveState = "running" | "waiting" | "needs_you" | "unknown";
+export type SessionStatus = "running" | "delegating" | "needs_you" | "finished" | "unknown";
+export type LiveState = "running" | "delegating" | "waiting" | "needs_you" | "unknown";
 
 export interface Kpis {
   /** cacheRead ÷ apiCalls — how heavy each turn was. */
@@ -157,6 +157,7 @@ export interface LiveSessionState {
   evidence: string[];
   pid: number | null;
   consoleId: string | null;
+  activeSubagents: number;
   observedAtMs: number;
 }
 

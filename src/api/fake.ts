@@ -631,9 +631,11 @@ export class FakeFeatherApi implements FeatherApi {
         state:
           r.row.status === "needs_you"
             ? "needs_you"
-            : r.row.status === "running"
-              ? "running"
-              : "unknown",
+            : r.row.status === "delegating"
+              ? "delegating"
+              : r.row.status === "running"
+                ? "running"
+                : "unknown",
         projectLeaf: r.row.projectLeaf,
         title: r.row.title,
         name: r.row.name,
@@ -642,6 +644,7 @@ export class FakeFeatherApi implements FeatherApi {
         evidence: [`pid ${4200 + r.row.title.length}`, `cwd ${r.row.cwd}`],
         pid: 4200 + r.row.title.length,
         consoleId: null,
+        activeSubagents: r.row.status === "delegating" ? 1 : 0,
         observedAtMs: Date.now(),
       }));
     return {

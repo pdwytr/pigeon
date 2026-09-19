@@ -393,6 +393,8 @@ the same session and collapsed into one row). Two or more sessions in a folder w
 `role == "assistant"`: `data.time.completed` null → running; present (`finish` e.g. `stop`) →
 finished. An outstanding `permission.asked` from the bridge → **needs you**; the `permission` table
 holds *saved rules*, not pending asks (0 rows during a live ask, measured 2026-09-18).
+An active child session in OpenCode's `parent_id` relation makes an otherwise waiting parent
+**delegating**; child counters remain separate from the parent's counters.
 
 **2.3.6 Capacity.** None: OpenCode is provider-agnostic and states no allowance. The card says
 "capacity not exposed by this engine". `opencode` supports `--session <id>`; `--fork` exists and is

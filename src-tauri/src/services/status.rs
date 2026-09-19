@@ -226,12 +226,15 @@ pub struct OpenCodeProcess {
 /// source that can make it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenCodeAttribution {
-    pub pid: u32,
+    /// None when several OpenCode processes share a directory. The session can be shown as live,
+    /// but no individual process may be stopped from that ambiguous evidence.
+    pub pid: Option<u32>,
     pub sid: String,
     pub state: LiveState,
     pub since_ms: Option<i64>,
     pub raw_word: Option<String>,
     pub evidence: Vec<String>,
+    pub active_subagents: u32,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -753,6 +756,16 @@ impl StatusService {
                 }
                 None => (wait.turn_state(), wait.turn_word()),
             };
+            let active_subagents =
+                codex::codex_subagent_facts(&self.roots.codex_sessions, &thread).active;
+            let state = if state == LiveState::Waiting && active_subagents > 0 {
+                evidence.push(note(format!(
+                    "Codex is idle while {active_subagents} delegated subagent(s) are still active"
+                )));
+                LiveState::Delegating
+            } else {
+                state
+            };
             out.live.push(LiveObservation {
                 key: SessionKey::new(ProviderId::Codex, thread),
                 process: ProcessPresence::Present,
@@ -762,6 +775,7 @@ impl StatusService {
                 evidence,
                 pid: Some(pid),
                 console_id: None,
+                active_subagents,
                 observed_at_ms: now_ms(),
             });
         }
@@ -820,15 +834,16 @@ impl StatusService {
             if attribution.sid.trim().is_empty() {
                 continue;
             }
-            // The attributor names sessions; it does not get to name processes. A pid this pass
-            // never proved alive would mint a row that is stoppable — `stop_session` signals
-            // whatever `pid` an observation carries — on the attributor's say-so alone, with the
-            // host half of the evidence empty. Refuse it here, where the proved set still exists.
-            let Some(proved) = processes.iter().find(|p| p.pid == attribution.pid) else {
-                stray = true;
-                continue;
+            let mut evidence = match attribution.pid {
+                Some(pid) => {
+                    let Some(proved) = processes.iter().find(|p| p.pid == pid) else {
+                        stray = true;
+                        continue;
+                    };
+                    proved.evidence.clone()
+                }
+                None => vec!["OpenCode has multiple live processes in this directory; the exact process-to-session mapping is ambiguous".into()],
             };
-            let mut evidence = proved.evidence.clone();
             evidence.extend(attribution.evidence.into_iter().map(note));
             out.live.push(LiveObservation {
                 key: SessionKey::new(ProviderId::OpenCode, attribution.sid),
@@ -837,7 +852,8 @@ impl StatusService {
                 since_ms: attribution.since_ms,
                 raw_word: attribution.raw_word,
                 evidence,
-                pid: Some(attribution.pid),
+                active_subagents: attribution.active_subagents,
+                pid: attribution.pid,
                 console_id: None,
                 observed_at_ms: now_ms(),
             });
@@ -1096,9 +1112,10 @@ fn probe_error(provider: Option<ProviderId>, failure: ProbeFailure, program: &st
 fn rank(state: LiveState) -> u8 {
     match state {
         LiveState::Running => 0,
-        LiveState::NeedsYou => 1,
-        LiveState::Waiting => 2,
-        LiveState::Unknown => 3,
+        LiveState::Delegating => 1,
+        LiveState::NeedsYou => 2,
+        LiveState::Waiting => 3,
+        LiveState::Unknown => 4,
     }
 }
 
@@ -1112,7 +1129,10 @@ fn collapse(mut raw: Vec<LiveObservation>) -> Vec<LiveObservation> {
     let mut out: Vec<LiveObservation> = Vec::with_capacity(raw.len());
     for obs in raw {
         match out.last_mut() {
-            Some(last) if last.key == obs.key => last.evidence.extend(obs.evidence),
+            Some(last) if last.key == obs.key => {
+                last.active_subagents = last.active_subagents.max(obs.active_subagents);
+                last.evidence.extend(obs.evidence);
+            }
             _ => out.push(obs),
         }
     }
@@ -1180,6 +1200,8 @@ fn claude_observation(
     // shared policy before the ordinary running/waiting/unknown turn call. Every engine reaches
     // this decision through the same `WaitPolicy`, so none of them can quietly skip a case.
     let tail = claude::claude_tail_facts(projects_root, sid);
+    let active_subagents =
+        claude::claude_subagent_facts(projects_root, sid).map_or(0, |facts| facts.active);
     let wait = claude::ClaudeWait::new(word, tail.as_ref());
     let (state, raw_word) = match wait.owner_wait() {
         Some(signal) => {
@@ -1201,6 +1223,16 @@ fn claude_observation(
             (state, word.to_string())
         }
     };
+    if state == LiveState::Waiting && active_subagents > 0 {
+        evidence.push(note(format!(
+            "Claude Code is idle while {active_subagents} delegated subagent(s) are still active"
+        )));
+    }
+    let state = if state == LiveState::Waiting && active_subagents > 0 {
+        LiveState::Delegating
+    } else {
+        state
+    };
     let since_ms = value
         .get("statusUpdatedAt")
         .or_else(|| value.get("updatedAt"))
@@ -1216,6 +1248,7 @@ fn claude_observation(
         evidence,
         pid: Some(pid),
         console_id: None,
+        active_subagents,
         observed_at_ms: now_ms(),
     }))
 }
@@ -2230,12 +2263,13 @@ mod tests {
                 Ok(processes
                     .iter()
                     .map(|p| OpenCodeAttribution {
-                        pid: p.pid,
+                        pid: Some(p.pid),
                         sid: format!("ses_{}", p.pid),
                         state: LiveState::NeedsYou,
                         since_ms: Some(1_789_334_207_814),
                         raw_word: Some("permission".into()),
                         evidence: vec![format!("a pending permission row names pid {}", p.pid)],
+                        active_subagents: 0,
                     })
                     .collect())
             }
@@ -2275,12 +2309,13 @@ mod tests {
                 processes: &[OpenCodeProcess],
             ) -> Result<Vec<OpenCodeAttribution>, EngineError> {
                 let attribution = |pid: u32, sid: &str| OpenCodeAttribution {
-                    pid,
+                    pid: Some(pid),
                     sid: sid.to_string(),
                     state: LiveState::Running,
                     since_ms: None,
                     raw_word: None,
                     evidence: vec![],
+                    active_subagents: 0,
                 };
                 let mut out: Vec<OpenCodeAttribution> = processes
                     .iter()
@@ -2602,6 +2637,7 @@ mod tests {
             evidence: vec![format!("pid {pid} says {word}")],
             pid: Some(pid),
             console_id: None,
+            active_subagents: 0,
             observed_at_ms: 9,
         }
     }

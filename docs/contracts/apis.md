@@ -178,7 +178,7 @@ from session KPIs. counted less than sessions is visible while lazy counting con
 ### 3.5 Live status
 
 ~~~ts
-type LiveState = "running" | "needs_you" | "unknown";
+type LiveState = "running" | "delegating" | "needs_you" | "unknown";
 
 interface LiveSessionState {
   key: SessionKey;
@@ -192,6 +192,7 @@ interface LiveSessionState {
   evidence: string[];
   pid: number | null;
   consoleId: string | null;
+  activeSubagents: number;
   observedAtMs: number;
 }
 

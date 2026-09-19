@@ -272,6 +272,7 @@ pub struct LiveSessionStateDto {
     pub evidence: Vec<String>,
     pub pid: Option<u32>,
     pub console_id: Option<String>,
+    pub active_subagents: u32,
     pub observed_at_ms: i64,
 }
 
@@ -297,6 +298,7 @@ impl LiveSessionStateDto {
             evidence: obs.evidence.clone(),
             pid: obs.pid,
             console_id: obs.console_id.clone(),
+            active_subagents: obs.active_subagents,
             observed_at_ms: obs.observed_at_ms,
         }
     }

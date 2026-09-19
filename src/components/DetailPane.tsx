@@ -114,9 +114,8 @@ export function DetailPane(props: DetailPaneProps) {
 
   if (selection.kind === "session" && selectedSession) {
     const label = sessionLabel(selectedSession);
-    const statusWord =
-      selectedSession.status === "needs_you" ? "unknown" : (selectedSession.status ?? "no status");
-    const provable = props.liveStatus?.process === "present";
+    const statusWord = selectedSession.status ?? "no status";
+    const provable = props.liveStatus?.process === "present" && props.liveStatus.pid !== null;
     const attachedHere = props.visibleConsole?.sessionKey
       ? props.visibleConsole.sessionKey.providerId === selectedSession.key.providerId &&
         props.visibleConsole.sessionKey.sid === selectedSession.key.sid

@@ -89,18 +89,31 @@ impl OpenCodeAttributor for HostOpenCodeAttributor {
                 continue;
             };
             let activity = self.adapter.read_activity(&sid)?;
+            let active_subagents = self.adapter.active_subagents(&sid)?;
+            let state =
+                if activity.state == crate::domain::LiveState::Waiting && active_subagents > 0 {
+                    crate::domain::LiveState::Delegating
+                } else {
+                    activity.state
+                };
             let mut evidence = vec![format!("{how}: {sid}")];
             if let Some(cwd) = process.cwd.as_ref() {
                 evidence.push(format!("its working directory is {}", cwd.display()));
             }
+            if active_subagents > 0 {
+                evidence.push(format!(
+                    "OpenCode has {active_subagents} active child session(s) delegated from this session"
+                ));
+            }
             evidence.extend(activity.evidence);
             attributed.push(OpenCodeAttribution {
-                pid: process.pid,
+                pid: Some(process.pid),
                 sid,
-                state: activity.state,
+                state,
                 since_ms: activity.since_ms.or(Some(session.last_active_ms)),
                 raw_word: activity.raw_word,
                 evidence,
+                active_subagents,
             });
         }
         Ok(attributed)

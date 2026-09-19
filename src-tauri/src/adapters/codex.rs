@@ -490,6 +490,7 @@ struct FileFact {
 #[derive(Clone, Debug)]
 struct Head {
     own_id: String,
+    parent_id: Option<String>,
     is_subagent: bool,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
@@ -633,9 +634,14 @@ fn read_head(path: &Path) -> Option<Head> {
         let payload = record.get("payload")?;
         let own_id = text(payload.get("id")).or_else(|| text(payload.get("session_id")))?;
         let session_id = text(payload.get("session_id"));
+        let parent_id = text(payload.get("parent_thread_id")).or_else(|| {
+            session_id
+                .as_deref()
+                .filter(|sid| *sid != own_id)
+                .map(str::to_string)
+        });
         let thread_source = text(payload.get("thread_source"));
-        let is_subagent = thread_source.as_deref() == Some("subagent")
-            || session_id.map(|sid| sid != own_id).unwrap_or(false);
+        let is_subagent = thread_source.as_deref() == Some("subagent") || parent_id.is_some();
         let started_ms = text(payload.get("timestamp"))
             .as_deref()
             .and_then(parse_iso_ms)
@@ -646,6 +652,7 @@ fn read_head(path: &Path) -> Option<Head> {
             });
         return Some(Head {
             own_id,
+            parent_id,
             is_subagent,
             cwd: text(payload.get("cwd")).map(PathBuf::from),
             git_branch: payload.get("git").and_then(|git| text(git.get("branch"))),
@@ -1155,6 +1162,32 @@ pub fn codex_turn(rollout: &Path) -> Option<(CodexTurn, Option<i64>)> {
     None
 }
 
+/// Count child rollouts whose own turn is still open. Child rollouts remain separate evidence: this
+/// helper only supplies the parent's derived delegation state and never folds their counters into
+/// the parent.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CodexSubagentFacts {
+    pub active: u32,
+}
+
+pub fn codex_subagent_facts(root: &Path, parent_id: &str) -> CodexSubagentFacts {
+    let mut files = Vec::new();
+    collect_rollouts(root, &mut files);
+    let mut facts = CodexSubagentFacts::default();
+    for file in files {
+        let Some(head) = read_head(&file.path) else {
+            continue;
+        };
+        if head.parent_id.as_deref() != Some(parent_id) {
+            continue;
+        }
+        if matches!(codex_turn(&file.path), Some((CodexTurn::Open, _))) {
+            facts.active += 1;
+        }
+    }
+    facts
+}
+
 /// Codex's [`WaitPolicy`]: the `PermissionRequest` hook for permission, the rollout's
 /// `turn_aborted` marker for interruption.
 ///
@@ -1422,6 +1455,25 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    #[test]
+    fn an_open_child_turn_is_reported_as_active_for_its_parent() {
+        let home = Home::new();
+        let parent = "019ddfa6-69b5-7452-9ce7-61fcb606b9f7";
+        let child = "019ddfa6-69b5-7452-9ce7-61fcb606b9f8";
+        home.rollout(
+            "2026-09-12T15-31-11-000000-019ddfa6-69b5-7452-9ce7-61fcb606b9f8",
+            &[
+                subagent_meta(child, parent, "subagent"),
+                r#"{"timestamp":"2026-09-12T15:31:12.000Z","type":"event_msg","payload":{"type":"task_started"}}"#.into(),
+            ],
+        );
+
+        assert_eq!(
+            codex_subagent_facts(home.path().join("sessions").as_path(), parent).active,
+            1
+        );
     }
 
     fn user_event(message: &str, ts: &str) -> String {

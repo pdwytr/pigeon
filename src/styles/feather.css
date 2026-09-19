@@ -224,6 +224,7 @@ a { color: var(--blue); text-decoration: none; }
 
 .status { font-size: 10px; font-weight: 700; white-space: nowrap; }
 .status.running { color: var(--green); }
+.status.delegating { color: var(--cyan, #6ed6ff); }
 .status.needs_you { color: var(--red); }
 .status.finished { color: var(--amber); }
 .status.unknown, .status.absent { color: var(--muted); }

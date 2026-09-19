@@ -246,12 +246,13 @@ pub struct LiveObservation {
     pub evidence: Vec<String>,
     pub pid: Option<u32>,
     pub console_id: Option<String>,
+    pub active_subagents: u32,
     pub observed_at_ms: i64,
 }
 
 pub enum ProcessPresence { Present, Absent }
 
-pub enum LiveState { Running, NeedsYou, Unknown }
+pub enum LiveState { Running, Delegating, NeedsYou, Unknown }
 ```
 
 Rules:

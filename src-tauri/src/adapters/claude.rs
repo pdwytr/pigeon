@@ -1425,6 +1425,59 @@ pub fn claude_tail_facts(root: &Path, sid: &str) -> Option<ClaudeTailFacts> {
     Some(classify_claude_tail(&tail))
 }
 
+/// The child transcripts beside a Claude session are the only durable evidence that delegation is
+/// happening. A child is active until its latest assistant message has reached `end_turn`; merely
+/// having a sidecar file is not evidence because completed children remain on disk.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ClaudeSubagentFacts {
+    pub active: u32,
+}
+
+pub fn claude_subagent_facts(root: &Path, sid: &str) -> Option<ClaudeSubagentFacts> {
+    let entries = std::fs::read_dir(root).ok()?;
+    let parent = entries
+        .flatten()
+        .map(|entry| entry.path().join(sid))
+        .find(|path| path.is_dir())?;
+    let subagents = parent.join("subagents");
+    let mut facts = ClaudeSubagentFacts::default();
+    for entry in std::fs::read_dir(subagents).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(OsStr::to_str) != Some("jsonl") {
+            continue;
+        }
+        let Ok(tail) = read_tail(&path, 64 * 1024) else {
+            continue;
+        };
+        if subagent_tail_is_active(&tail) {
+            facts.active += 1;
+        }
+    }
+    Some(facts)
+}
+
+fn subagent_tail_is_active(tail: &str) -> bool {
+    for line in tail.lines().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("assistant") => {
+                return value
+                    .get("message")
+                    .and_then(|message| message.get("stop_reason"))
+                    .and_then(Value::as_str)
+                    != Some("end_turn");
+            }
+            // A tool result means the child is still in the middle of a model turn. It cannot be
+            // considered complete until a later assistant record closes that turn.
+            Some("user") => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Walk a transcript tail backwards and classify the newest record.
 ///
 /// Set when a tool result is the newest thing seen, so the assistant record just before it is a
@@ -2590,6 +2643,19 @@ mod tests {
     }
 
     // -- The three owner cases, through the shared policy ---------------------------------------
+
+    #[test]
+    fn a_subagent_is_active_until_its_assistant_turn_reaches_end_turn() {
+        assert!(subagent_tail_is_active(
+            r#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#
+        ));
+        assert!(subagent_tail_is_active(
+            r#"{"type":"user","message":{"content":[{"type":"tool_result"}]}}"#
+        ));
+        assert!(!subagent_tail_is_active(
+            r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#
+        ));
+    }
 
     #[test]
     fn claude_permission_words_are_the_permission_case() {

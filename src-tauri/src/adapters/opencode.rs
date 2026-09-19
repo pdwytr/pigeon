@@ -515,6 +515,28 @@ impl OpenCodeAdapter {
         self.with_db(|db| db.activity(sid, bridged))
     }
 
+    /// Count child sessions that are still working. Completed children remain in the database, so
+    /// this asks each child for current activity instead of treating `parent_id` as proof.
+    pub fn active_subagents(&self, sid: &str) -> Result<u32, EngineError> {
+        let sid = sid.trim();
+        if sid.is_empty() {
+            return Err(EngineError::of(PROVIDER, ErrorKind::Path));
+        }
+        self.with_db(|db| {
+            db.require("session", &["id", "parent_id"])?;
+            let mut stmt = db.prepare("SELECT id FROM session WHERE parent_id = ?1")?;
+            let mut rows = stmt.query([sid]).map_err(|error| db.classify(&error))?;
+            let mut active = 0;
+            while let Some(row) = rows.next().map_err(|error| db.classify(&error))? {
+                let child: String = row.get(0).map_err(|error| db.classify(&error))?;
+                if matches!(db.activity(&child, false)?.state, LiveState::Running) {
+                    active += 1;
+                }
+            }
+            Ok(active)
+        })
+    }
+
     /// Every root session's counters in three statements total, whatever the session count.
     ///
     /// Each entry holds exactly what the per-session [`Self::read_metrics`] would have returned
@@ -1975,6 +1997,22 @@ mod tests {
             "a healthy store reports no problem"
         );
         assert_eq!(sids(&report), vec!["ses_root".to_string()]);
+    }
+
+    #[test]
+    fn active_child_work_is_counted_without_promoting_completed_children() {
+        let fx = Fixture::new();
+        fx.insert_session(&TestSession::new("ses_root"));
+        fx.insert_session(&TestSession::new("ses_working").child_of("ses_root"));
+        fx.insert_session(&TestSession::new("ses_done").child_of("ses_root"));
+        fx.insert_part("child-work", "ses_working", r#"{"type":"step-start"}"#);
+        fx.insert_part(
+            "child-done",
+            "ses_done",
+            r#"{"type":"step-finish","reason":"stop"}"#,
+        );
+
+        assert_eq!(fx.adapter().active_subagents("ses_root").unwrap(), 1);
     }
 
     #[test]
