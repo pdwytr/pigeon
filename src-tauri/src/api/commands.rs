@@ -17,9 +17,9 @@ use crate::api::errors::ApiError;
 use crate::api::types::{
     AccountStatusDto, AccountStatusResult, AmbiguousProcessDto, CodexHooksReportDto,
     CodexHooksStatusDto, ConsoleListResult, ConsoleOpenedDto, ConsoleScrollbackDto, HostInfo,
-    HoverVisibilityDto, MetricStateDto, PickedFolderDto, ProjectSummaryDto, ProjectSummaryResult,
-    Scope, SessionDto, SessionListResult, SessionRowDto, StatusSnapshotDto, StopResultDto,
-    StoppedProcessDto,
+    HoverVisibilityDto, MetricStateDto, OpenCodeHooksReportDto, OpenCodeHooksStatusDto,
+    PickedFolderDto, ProjectSummaryDto, ProjectSummaryResult, Scope, SessionDto, SessionListResult,
+    SessionRowDto, StatusSnapshotDto, StopResultDto, StoppedProcessDto,
 };
 use crate::app_state::AppState;
 use crate::domain::SessionKey;
@@ -488,6 +488,43 @@ pub async fn codex_hooks_disable() -> Result<(), ApiError> {
         .await
         .map_err(|_| ApiError::host("the Codex hook removal did not finish"))?
         .map_err(|_| ApiError::host("Codex did not accept the removal"))
+}
+
+// ---------------------------------------------------------------------------------------------
+// The OpenCode waiting-on-you bridge
+// ---------------------------------------------------------------------------------------------
+
+/// Has the owner already let Pigeon see OpenCode waiting on them?
+#[tauri::command]
+pub async fn opencode_hooks_status() -> OpenCodeHooksStatusDto {
+    OpenCodeHooksStatusDto {
+        installed: crate::services::opencode_hooks::is_installed(),
+    }
+}
+
+/// Install the bridge plugin. One owner decision, in the View, behind this command.
+///
+/// A file write, so it runs on a blocking thread rather than the UI thread — the same discipline
+/// the Codex install follows, even though this one is cheap.
+#[tauri::command]
+pub async fn opencode_hooks_enable() -> Result<OpenCodeHooksReportDto, ApiError> {
+    let report = tauri::async_runtime::spawn_blocking(crate::services::opencode_hooks::install)
+        .await
+        .map_err(|_| ApiError::host("the OpenCode bridge install did not finish"))?
+        .map_err(|_| ApiError::host("the OpenCode bridge could not be written"))?;
+    Ok(OpenCodeHooksReportDto {
+        installed: report.installed,
+        message: report.message,
+    })
+}
+
+/// Undo the install: the plugin file is removed from the owner's OpenCode config.
+#[tauri::command]
+pub async fn opencode_hooks_disable() -> Result<(), ApiError> {
+    tauri::async_runtime::spawn_blocking(crate::services::opencode_hooks::uninstall)
+        .await
+        .map_err(|_| ApiError::host("the OpenCode bridge removal did not finish"))?
+        .map_err(|_| ApiError::host("the OpenCode bridge could not be removed"))
 }
 
 /// Bring the compact hover forward and tell it which row to select.

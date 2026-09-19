@@ -31,6 +31,8 @@ import {
   type MetricState,
   type Metrics,
   type MetricsTotals,
+  type OpenCodeHooksReport,
+  type OpenCodeHooksStatus,
   type ProjectSummary,
   type ProjectSummaryResult,
   type ProviderId,
@@ -514,6 +516,7 @@ export class FakeFeatherApi implements FeatherApi {
   };
   private hoverVisible = false;
   private codexHooksInstalled = false;
+  private opencodeHooksInstalled = false;
   private seq = 0;
   private lateMetricsScheduled = false;
   private subs = {
@@ -840,6 +843,25 @@ export class FakeFeatherApi implements FeatherApi {
   async codexHooksDisable(): Promise<void> {
     this.record("codex_hooks_disable");
     this.codexHooksInstalled = false;
+  }
+
+  async opencodeHooksStatus(): Promise<OpenCodeHooksStatus> {
+    this.record("opencode_hooks_status");
+    return { installed: this.opencodeHooksInstalled };
+  }
+
+  async opencodeHooksEnable(): Promise<OpenCodeHooksReport> {
+    this.record("opencode_hooks_enable");
+    this.opencodeHooksInstalled = true;
+    return {
+      installed: true,
+      message: "Restart OpenCode to start showing when it waits on you.",
+    };
+  }
+
+  async opencodeHooksDisable(): Promise<void> {
+    this.record("opencode_hooks_disable");
+    this.opencodeHooksInstalled = false;
   }
 
   onSessionsChanged(cb: (e: SessionsChangedPayload) => void): Unsubscribe {

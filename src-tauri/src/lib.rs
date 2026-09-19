@@ -80,6 +80,9 @@ pub fn run() {
             api::commands::codex_hooks_status,
             api::commands::codex_hooks_enable,
             api::commands::codex_hooks_disable,
+            api::commands::opencode_hooks_status,
+            api::commands::opencode_hooks_enable,
+            api::commands::opencode_hooks_disable,
         ])
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]

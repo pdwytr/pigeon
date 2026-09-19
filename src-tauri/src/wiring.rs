@@ -16,8 +16,17 @@ use crate::services::status::{
     OpenCodeAttribution, OpenCodeAttributor, OpenCodeProcess, StatusService, StopOutcome,
 };
 
-/// Attributes a live OpenCode process to the newest non-archived session in the same directory.
-/// The directory is only used for identity; the adapter's database marker owns the state decision.
+/// Attributes a live OpenCode process to its session, **exactly** when the installed bridge can
+/// say which session the process is working on, and only by the folder otherwise.
+///
+/// **Why the folder is not enough.** A cwd is a folder, and two `opencode` processes can share one
+/// — measured on this Mac 2026-09-18: two live processes in this project, both `cwd=feather`, both
+/// resolving to the same newest session, which then collapsed into one row and hid the other
+/// session entirely. The bridge plugin runs inside each process and records the session ids it sees
+/// against its own pid, so the common case is exact. The folder fallback is kept for a machine that
+/// has not installed the bridge, but it is **refused when it would be a guess**: if more than one
+/// discovered session shares the folder, no process is attributed to any of them rather than all of
+/// them being attributed to the newest.
 struct HostOpenCodeAttributor {
     adapter: opencode::OpenCodeAdapter,
 }
@@ -39,29 +48,55 @@ impl OpenCodeAttributor for HostOpenCodeAttributor {
         if let Some(problem) = report.problem {
             return Err(problem);
         }
+        let known: std::collections::BTreeSet<String> = report
+            .sessions
+            .iter()
+            .map(|session| session.key.sid.clone())
+            .collect();
+        let bridge = self.adapter.bridge();
 
         let mut attributed = Vec::new();
         for process in processes {
-            let Some(cwd) = process.cwd.as_ref() else {
-                continue;
+            // Exact first: the bridge names the session this process is working on.
+            let claimed = bridge.claimed_session(process.pid, &known);
+            let (sid, how) = match claimed {
+                Some(sid) => (sid.to_string(), "the installed bridge names this session"),
+                None => {
+                    let Some(cwd) = process.cwd.as_ref() else {
+                        continue;
+                    };
+                    let candidates: Vec<&_> = report
+                        .sessions
+                        .iter()
+                        .filter(|candidate| candidate.cwd.as_ref() == Some(cwd))
+                        .collect();
+                    // One session in the folder is the folder's answer. Two is a coin flip, and
+                    // this file does not flip coins: the invariant is "never guess an attribution".
+                    let [only] = candidates.as_slice() else {
+                        continue;
+                    };
+                    (
+                        only.key.sid.clone(),
+                        "it is the only OpenCode session in this process's folder",
+                    )
+                }
             };
             let Some(session) = report
                 .sessions
                 .iter()
-                .filter(|candidate| candidate.cwd.as_ref() == Some(cwd))
-                .max_by_key(|candidate| candidate.last_active_ms)
+                .find(|candidate| candidate.key.sid == sid)
             else {
                 continue;
             };
-            let activity = self.adapter.read_activity(&session.key.sid)?;
-            let mut evidence = vec![format!(
-                "matched the newest OpenCode session in {}",
-                cwd.display()
-            )];
+            let activity = self.adapter.read_activity(&sid)?;
+            let mut evidence = vec![format!("{how}: {sid}")];
+            if let Some(cwd) = process.cwd.as_ref() {
+                evidence.push(format!("its working directory is {}", cwd.display()));
+            }
             evidence.extend(activity.evidence);
             attributed.push(OpenCodeAttribution {
                 pid: process.pid,
-                sid: session.key.sid.clone(),
+                sid,
                 state: activity.state,
                 since_ms: activity.since_ms.or(Some(session.last_active_ms)),
                 raw_word: activity.raw_word,

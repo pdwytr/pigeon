@@ -18,6 +18,8 @@ import type {
   ConsoleSummary,
   HostInfo,
   MetricState,
+  OpenCodeHooksReport,
+  OpenCodeHooksStatus,
   ProjectSummaryResult,
   ProviderId,
   Scope,
@@ -80,6 +82,12 @@ export interface FeatherApi {
   /** Install and trust the Codex hook. One owner decision, one command. */
   codexHooksEnable(): Promise<CodexHooksReport>;
   codexHooksDisable(): Promise<void>;
+
+  /** Whether Pigeon can see OpenCode waiting on the owner at all. */
+  opencodeHooksStatus(): Promise<OpenCodeHooksStatus>;
+  /** Install the OpenCode permission bridge. One owner decision, one command. */
+  opencodeHooksEnable(): Promise<OpenCodeHooksReport>;
+  opencodeHooksDisable(): Promise<void>;
 
   onSessionsChanged(cb: (e: SessionsChangedPayload) => void): Unsubscribe;
   onSessionsMetrics(cb: (e: SessionsMetricsEvent) => void): Unsubscribe;

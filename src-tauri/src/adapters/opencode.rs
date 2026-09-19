@@ -288,9 +288,175 @@ impl WaitPolicy for OpenCodeWait<'_> {
     }
 }
 
+/// Where the installed bridge plugin appends. Beside Pigeon's own settings, never inside
+/// OpenCode's data directory (invariant 1).
+///
+/// Defined here rather than in `services/opencode_hooks.rs` because the adapter is what turns the
+/// file into a state, and the adapter may not reach into `services`. The install side imports this
+/// one function, so the path has exactly one definition.
+pub fn bridge_events_path() -> PathBuf {
+    crate::settings::default_path()
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("opencode-bridge-events.jsonl")
+}
+
+/// How much of the bridge file is read. One short JSON line per record, appended forever, so the
+/// tail is the only part that can describe the present; the whole file is never loaded.
+const BRIDGE_TAIL_BYTES: u64 = 256 * 1024;
+
+/// What the bridge file says, in the two shapes the adapter needs.
+///
+/// **Why this file exists at all.** OpenCode's process→session link is in-process only: a live
+/// process holds no per-session file, socket or port (measured 2026-09-18: both of two live
+/// processes in one folder held only the shared `opencode.db`, `-wal`, `-shm` and the log), and a
+/// pending permission is persisted nowhere. A plugin running *inside* the process is the only thing
+/// that can see either, so the installed bridge records both.
+#[derive(Default)]
+pub struct OpenCodeBridge {
+    /// Sessions with an outstanding permission ask.
+    pub pending: BTreeSet<String>,
+    /// Newest-first session claims per pid.
+    claims: BTreeMap<u32, Vec<String>>,
+}
+
+impl OpenCodeBridge {
+    /// The newest session this pid claimed that is a session we know about.
+    ///
+    /// `known` is the discovered root sessions: a plugin sees subagent events too, and the process
+    /// the owner is driving is the root, never the subagent. Restricting to the discovered set
+    /// (which already excludes subagents and archived rows) is what keeps the answer the root.
+    pub fn claimed_session<'a>(&'a self, pid: u32, known: &BTreeSet<String>) -> Option<&'a str> {
+        self.claims
+            .get(&pid)?
+            .iter()
+            .find(|sid| known.contains(*sid))
+            .map(String::as_str)
+    }
+}
+
+/// Read the bridge file into its two shapes.
+///
+/// Records are append-ordered, so the last claim for a pid wins. **A pid can be reused**, so every
+/// record carries the writing process's start time: a claim whose process started *earlier* than
+/// one already seen for that pid is a dead process's and is dropped, and a claim whose process
+/// started *later* supersedes everything before it. Without that guard a new `opencode` that
+/// happened to inherit a dead one's pid would be shown as the dead one's session.
+///
+/// Unreadable file, missing file, and unrecognised records all answer the empty bridge — "no bridge
+/// evidence", never a claim about what OpenCode is doing.
+pub fn read_bridge(path: &Path) -> OpenCodeBridge {
+    let Ok(text) = read_tail(path, BRIDGE_TAIL_BYTES) else {
+        return OpenCodeBridge::default();
+    };
+    let mut bridge = OpenCodeBridge::default();
+    let mut started: BTreeMap<u32, i64> = BTreeMap::new();
+    // Permission asks are keyed by request id so a reply clears only its own ask.
+    let mut outstanding: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for line in text.lines() {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(pid) = value.get("pid").and_then(serde_json::Value::as_u64) else {
+            continue;
+        };
+        let Ok(pid) = u32::try_from(pid) else {
+            continue;
+        };
+        let Some(record_started) = value.get("started").and_then(serde_json::Value::as_i64) else {
+            continue;
+        };
+        // A record from an older process holding the same pid: ignore it and everything else from
+        // that instance. A newer one resets what we had.
+        match started.get(&pid) {
+            Some(seen) if record_started < *seen => continue,
+            Some(seen) if record_started == *seen => {}
+            _ => {
+                started.insert(pid, record_started);
+                bridge.claims.remove(&pid);
+            }
+        }
+        let kind = value.get("kind").and_then(serde_json::Value::as_str);
+        let session_id = value
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|sid| !sid.is_empty());
+        match kind {
+            Some("session") => {
+                if let Some(sid) = session_id {
+                    bridge
+                        .claims
+                        .entry(pid)
+                        .or_default()
+                        .insert(0, sid.to_string());
+                }
+            }
+            Some("permission") => {
+                let Some(sid) = session_id else { continue };
+                let Some(event_name) = value
+                    .get("event_name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                else {
+                    continue;
+                };
+                let Some(request_id) = value
+                    .get("request_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                else {
+                    // Without an id a reply could never clear this ask, and the session would be
+                    // pinned at needs-you forever.
+                    continue;
+                };
+                let ids = outstanding.entry(sid.to_string()).or_default();
+                match event_name {
+                    "permission.asked" => {
+                        ids.insert(request_id.to_string());
+                    }
+                    "permission.replied" => {
+                        ids.remove(request_id);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    bridge.pending = outstanding
+        .into_iter()
+        .filter(|(_, ids)| !ids.is_empty())
+        .map(|(sid, _)| sid)
+        .collect();
+    bridge
+}
+
+/// Read at most `bytes` from the end of a file. Read-only, never locked: the file is Pigeon's own,
+/// but the discipline is the same one the rest of this adapter follows.
+fn read_tail(path: &Path, bytes: u64) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(bytes)))?;
+    let mut buf = Vec::with_capacity(bytes.min(len) as usize);
+    file.take(bytes).read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// The adapter. Rooted at a directory so a test can point it at a fixture without faking `$HOME`.
 pub struct OpenCodeAdapter {
     root: PathBuf,
+    /// Where the installed bridge plugin appends. A field so a test can point it at its own temp
+    /// file instead of reading the owner's real event log.
+    bridge_events: PathBuf,
 }
 
 impl OpenCodeAdapter {
@@ -300,12 +466,28 @@ impl OpenCodeAdapter {
     pub fn new() -> Self {
         Self {
             root: default_root(),
+            bridge_events: bridge_events_path(),
         }
     }
 
     /// Point the adapter at any directory holding `opencode.db` and `auth.json`.
     pub fn with_root(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            bridge_events: bridge_events_path(),
+        }
+    }
+
+    /// Point the bridge reader at a specific event file. Tests use it; a real install reads the
+    /// path the plugin was written with.
+    pub fn with_bridge_events(mut self, path: impl Into<PathBuf>) -> Self {
+        self.bridge_events = path.into();
+        self
+    }
+
+    /// The bridge file's contents, read once for a whole attribution pass.
+    pub fn bridge(&self) -> OpenCodeBridge {
+        read_bridge(&self.bridge_events)
     }
 
     pub fn database_path(&self) -> PathBuf {
@@ -319,15 +501,18 @@ impl OpenCodeAdapter {
     /// Read the newest OpenCode turn marker for a session.
     ///
     /// `step-start` and unfinished tool parts mean the engine is still working. A `step-finish`
-    /// or completed assistant message means it is sitting idle. OpenCode represents an approval
-    /// pause as a pending tool/permission part, which is intentionally reported as unknown until
-    /// Pigeon has a reliable approval-state signal.
+    /// or completed assistant message means it is sitting idle. A live approval is invisible in
+    /// the database (see [`bridge_events_path`]); it is read from the bridge file the installed
+    /// plugin appends to, and passed into the state decision here.
     pub fn read_activity(&self, sid: &str) -> Result<OpenCodeActivity, EngineError> {
         let sid = sid.trim();
         if sid.is_empty() {
             return Err(EngineError::of(PROVIDER, ErrorKind::Path));
         }
-        self.with_db(|db| db.activity(sid))
+        // One read per call. The caller already dedupes by session, so the bridge file is read once
+        // for each live session at most, and it is a bounded tail read.
+        let bridged = self.bridge().pending.contains(sid);
+        self.with_db(|db| db.activity(sid, bridged))
     }
 
     /// Every root session's counters in three statements total, whatever the session count.
@@ -922,23 +1107,20 @@ impl Db {
         Ok(out)
     }
 
-    fn activity(&self, sid: &str) -> Result<OpenCodeActivity, EngineError> {
+    /// `bridged` is the bridge file's verdict for this session, read once by the caller: the
+    /// database cannot see a live approval (see [`bridge_events_path`]), so it arrives here as
+    /// a fact rather than being queried.
+    fn activity(&self, sid: &str, bridged: bool) -> Result<OpenCodeActivity, EngineError> {
         self.require("part", &["session_id", "time_updated", "data"])?;
         self.require("message", &["session_id", "time_updated", "data"])?;
 
-        // Gather the facts for the shared policy before deciding anything. Permission is the one
-        // case with two independent sources; either is enough.
-        //
-        // The mutable part row can move from pending to running while the approval UI is still
-        // visible. The append-only event stream preserves the transition Pigeon needs to render
-        // NeedsYou, so consult its newest part update as well as the permission table.
-        let permission = if self.pending_part_event(sid)? {
+        // Gather the facts for the shared policy before deciding anything. Permission has three
+        // independent sources and any one of them is enough: the bridge plugin (the only one that
+        // sees a real approval), the event stream's pending part, and the saved-rules table.
+        let permission = if bridged {
+            Some("OpenCode's permission bridge records an outstanding ask".to_string())
+        } else if self.pending_part_event(sid)? {
             Some("OpenCode's event stream records a pending owner approval".to_string())
-        } else if self.pending_permission(sid)? {
-            // The permission table is the authoritative human-waiting signal. A pending tool part
-            // alone is ambiguous: it can be an ordinary tool still executing. The permission row is
-            // scoped through the session's project, so it promotes only this session.
-            Some("OpenCode has a pending permission for this session".to_string())
         } else {
             None
         };
@@ -1014,24 +1196,6 @@ impl Db {
             &parsed,
             message.as_ref(),
         )))
-    }
-
-    fn pending_permission(&self, sid: &str) -> Result<bool, EngineError> {
-        let columns = self.columns("permission")?;
-        if columns.is_empty() || !columns.iter().any(|column| column == "project_id") {
-            return Ok(false);
-        }
-        let mut stmt = self.prepare(
-            "SELECT 1 FROM permission p
-             JOIN session s ON s.project_id = p.project_id
-             WHERE s.id = ?1 LIMIT 1",
-        )?;
-        stmt.query_row([sid], |_row| Ok(()))
-            .map(|_| true)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(false),
-                other => Err(self.classify(&other)),
-            })
     }
 
     fn pending_part_event(&self, sid: &str) -> Result<bool, EngineError> {
@@ -1669,30 +1833,80 @@ mod tests {
     }
 
     #[test]
-    fn activity_reads_a_pending_permission_as_needing_you() {
+    fn a_bridged_permission_ask_reads_as_needing_you_even_with_a_running_tool_part() {
         let fx = Fixture::new();
         fx.insert_session(&TestSession::new("ses_root"));
-        fx.writer
-            .execute_batch(
-                "CREATE TABLE permission (
-                   id TEXT PRIMARY KEY, project_id TEXT NOT NULL, action TEXT NOT NULL,
-                   resource TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL
-                 );
-                 INSERT INTO permission VALUES ('perm', 'prj', 'read', 'file', 1, 2);",
-            )
-            .expect("permission");
         fx.insert_part(
             "p1",
             "ses_root",
-            r#"{"type":"tool","state":{"status":"running"}}"#,
+            r#"{"type":"tool","tool":"bash","state":{"status":"running"}}"#,
         );
+        // The bridge file the installed plugin appends to, with one outstanding ask.
+        let events = fx.root.join("bridge-events.jsonl");
+        std::fs::write(
+            &events,
+            "{\"pid\":1,\"started\":100,\"kind\":\"permission\",\"session_id\":\"ses_root\",\"event_name\":\"permission.asked\",\"request_id\":\"per_1\"}\n",
+        )
+        .expect("bridge events");
+        let adapter = fx.adapter().with_bridge_events(&events);
 
-        let activity = fx
-            .adapter()
+        let activity = adapter
             .read_activity("ses_root")
             .expect("activity should be readable");
         assert_eq!(activity.state, LiveState::NeedsYou);
         assert_eq!(activity.raw_word.as_deref(), Some("permission"));
+    }
+
+    /// The reply clears the ask, and the tool part's own reading takes over again.
+    #[test]
+    fn a_replied_permission_ask_stops_needing_the_owner() {
+        let fx = Fixture::new();
+        fx.insert_session(&TestSession::new("ses_root"));
+        fx.insert_part(
+            "p1",
+            "ses_root",
+            r#"{"type":"tool","tool":"bash","state":{"status":"running"}}"#,
+        );
+        let events = fx.root.join("bridge-events.jsonl");
+        std::fs::write(
+            &events,
+            concat!(
+                "{\"pid\":1,\"started\":100,\"kind\":\"permission\",\"session_id\":\"ses_root\",\"event_name\":\"permission.asked\",\"request_id\":\"per_1\"}\n",
+                "{\"pid\":1,\"started\":100,\"kind\":\"permission\",\"session_id\":\"ses_root\",\"event_name\":\"permission.replied\",\"request_id\":\"per_1\"}\n",
+            ),
+        )
+        .expect("bridge events");
+        let adapter = fx.adapter().with_bridge_events(&events);
+
+        let activity = adapter
+            .read_activity("ses_root")
+            .expect("activity should be readable");
+        assert_eq!(activity.state, LiveState::Running);
+    }
+
+    /// A bridge ask for a different session must not promote this one.
+    #[test]
+    fn a_bridged_ask_for_another_session_leaves_this_one_alone() {
+        let fx = Fixture::new();
+        fx.insert_session(&TestSession::new("ses_root"));
+        fx.insert_part("p1", "ses_root", r#"{"type":"text","text":"done"}"#);
+        fx.insert_message(
+            "msg",
+            "ses_root",
+            r#"{"role":"assistant","time":{"completed":1}}"#,
+        );
+        let events = fx.root.join("bridge-events.jsonl");
+        std::fs::write(
+            &events,
+            "{\"pid\":1,\"started\":100,\"kind\":\"permission\",\"session_id\":\"ses_other\",\"event_name\":\"permission.asked\",\"request_id\":\"per_1\"}\n",
+        )
+        .expect("bridge events");
+        let adapter = fx.adapter().with_bridge_events(&events);
+
+        let activity = adapter
+            .read_activity("ses_root")
+            .expect("activity should be readable");
+        assert_eq!(activity.state, LiveState::Waiting);
     }
 
     #[test]
@@ -2520,5 +2734,249 @@ mod tests {
             .expect("activity should be readable");
         assert_eq!(activity.state, LiveState::Waiting);
         assert_eq!(activity.raw_word.as_deref(), Some("MessageAbortedError"));
+    }
+
+    // -- The bridge file ------------------------------------------------------------------------
+
+    fn bridge_line(pid: u32, started: i64, body: &str) -> String {
+        format!(r#"{{"pid":{pid},"started":{started},{body}}}"#)
+    }
+
+    #[test]
+    fn a_pending_ask_names_the_session_and_a_reply_clears_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                bridge_line(
+                    1,
+                    100,
+                    r#""kind":"permission","session_id":"a","event_name":"permission.asked","request_id":"per_1""#
+                ),
+                bridge_line(
+                    2,
+                    100,
+                    r#""kind":"permission","session_id":"b","event_name":"permission.asked","request_id":"per_2""#
+                ),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read_bridge(&path).pending,
+            BTreeSet::from(["a".to_string(), "b".to_string()])
+        );
+
+        // The reply is appended, as the plugin would: b's ask is still in the file and still
+        // outstanding, so only a is cleared.
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n",
+                bridge_line(
+                    1,
+                    100,
+                    r#""kind":"permission","session_id":"a","event_name":"permission.asked","request_id":"per_1""#
+                ),
+                bridge_line(
+                    2,
+                    100,
+                    r#""kind":"permission","session_id":"b","event_name":"permission.asked","request_id":"per_2""#
+                ),
+                bridge_line(
+                    1,
+                    100,
+                    r#""kind":"permission","session_id":"a","event_name":"permission.replied","request_id":"per_1""#
+                ),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read_bridge(&path).pending,
+            BTreeSet::from(["b".to_string()])
+        );
+    }
+
+    /// Two asks can be outstanding at once. A reply for one must not clear the other — the reason
+    /// this tracks request ids rather than "the last event wins".
+    #[test]
+    fn a_reply_for_one_ask_does_not_clear_a_second_outstanding_ask() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n",
+                bridge_line(
+                    1,
+                    100,
+                    r#""kind":"permission","session_id":"a","event_name":"permission.asked","request_id":"per_1""#
+                ),
+                bridge_line(
+                    1,
+                    100,
+                    r#""kind":"permission","session_id":"a","event_name":"permission.asked","request_id":"per_2""#
+                ),
+                bridge_line(
+                    1,
+                    100,
+                    r#""kind":"permission","session_id":"a","event_name":"permission.replied","request_id":"per_1""#
+                ),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read_bridge(&path).pending,
+            BTreeSet::from(["a".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_malformed_or_incomplete_bridge_record_is_skipped_and_the_rest_still_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "not json at all\n{}\n{}\n{}\n{}\n",
+                bridge_line(1, 100, r#""kind":"permission","session_id":"a""#),
+                bridge_line(
+                    1,
+                    100,
+                    r#""kind":"permission","session_id":"","event_name":"permission.asked","request_id":"per_1""#
+                ),
+                bridge_line(
+                    1,
+                    100,
+                    r#""kind":"permission","session_id":"a","event_name":"something-else","request_id":"per_1""#
+                ),
+                bridge_line(
+                    1,
+                    100,
+                    r#""kind":"permission","session_id":"a","event_name":"permission.asked","request_id":"per_9""#
+                ),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read_bridge(&path).pending,
+            BTreeSet::from(["a".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_missing_bridge_file_is_an_empty_answer_not_a_problem() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = read_bridge(&dir.path().join("nothing-here.jsonl"));
+        assert!(bridge.pending.is_empty());
+        assert!(bridge.claimed_session(1, &BTreeSet::new()).is_none());
+    }
+
+    // -- The pid -> session claims ---------------------------------------------------------------
+
+    #[test]
+    fn the_newest_claim_for_a_pid_is_the_session_it_is_working_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                bridge_line(42, 100, r#""kind":"session","session_id":"ses_old""#),
+                bridge_line(42, 100, r#""kind":"session","session_id":"ses_new""#),
+            ),
+        )
+        .unwrap();
+        let known = BTreeSet::from(["ses_old".to_string(), "ses_new".to_string()]);
+        assert_eq!(
+            read_bridge(&path).claimed_session(42, &known),
+            Some("ses_new")
+        );
+    }
+
+    /// A plugin sees subagent events too. The process the owner is driving is the root, so a claim
+    /// for a session we did not discover as a root (a subagent, or an archived row) is skipped in
+    /// favour of the next-newest one we did.
+    #[test]
+    fn a_claim_for_a_subagent_is_skipped_in_favour_of_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                bridge_line(42, 100, r#""kind":"session","session_id":"ses_root""#),
+                bridge_line(42, 100, r#""kind":"session","session_id":"ses_subagent""#),
+            ),
+        )
+        .unwrap();
+        // Only the root was discovered.
+        let known = BTreeSet::from(["ses_root".to_string()]);
+        assert_eq!(
+            read_bridge(&path).claimed_session(42, &known),
+            Some("ses_root")
+        );
+    }
+
+    /// **The pid-reuse guard.** macOS reuses pids. A new process that inherited a dead one's pid
+    /// must not be shown as the dead one's session, so a claim from an earlier process start is
+    /// ignored and a later one resets what was there.
+    #[test]
+    fn a_claim_from_a_reused_pid_is_not_attributed_to_the_new_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        // The old process claimed ses_dead, then died. A new process reuses pid 42 and claims
+        // ses_live.
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                bridge_line(42, 100, r#""kind":"session","session_id":"ses_dead""#),
+                bridge_line(42, 200, r#""kind":"session","session_id":"ses_live""#),
+            ),
+        )
+        .unwrap();
+        let known = BTreeSet::from(["ses_dead".to_string(), "ses_live".to_string()]);
+        assert_eq!(
+            read_bridge(&path).claimed_session(42, &known),
+            Some("ses_live"),
+            "the newer process's claim wins and the older one is dropped"
+        );
+
+        // And the reverse order — an older-starting process appending late — cannot overwrite the
+        // live one either.
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                bridge_line(42, 200, r#""kind":"session","session_id":"ses_live""#),
+                bridge_line(42, 100, r#""kind":"session","session_id":"ses_dead""#),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            read_bridge(&path).claimed_session(42, &known),
+            Some("ses_live")
+        );
+    }
+
+    #[test]
+    fn two_pids_in_one_folder_each_claim_their_own_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                bridge_line(1, 100, r#""kind":"session","session_id":"ses_a""#),
+                bridge_line(2, 100, r#""kind":"session","session_id":"ses_b""#),
+            ),
+        )
+        .unwrap();
+        let known = BTreeSet::from(["ses_a".to_string(), "ses_b".to_string()]);
+        let bridge = read_bridge(&path);
+        assert_eq!(bridge.claimed_session(1, &known), Some("ses_a"));
+        assert_eq!(bridge.claimed_session(2, &known), Some("ses_b"));
     }
 }

@@ -81,45 +81,68 @@ describe("the hover when the host cannot answer", () => {
   });
 });
 
-describe("the Codex waiting-on-you offer", () => {
+describe("the waiting-on-you offers", () => {
   beforeEach(() => window.localStorage.clear());
 
-  it("offers once, and a Yes installs the hook and says what happened", async () => {
+  it("offers once per engine, and a Yes installs that engine's bridge and says what happened", async () => {
     const api = createFakeApi();
     render(<HoverSurface api={api} pollMs={0} />);
 
-    const prompt = await screen.findByTestId("hook-prompt");
-    expect(within(prompt).getByText(/show when Codex waits on you/i)).toBeInTheDocument();
+    const codex = await screen.findByTestId("hook-prompt-codex");
+    expect(within(codex).getByText(/show when Codex waits on you/i)).toBeInTheDocument();
+    // Both engines are offered independently.
+    expect(screen.getByTestId("hook-prompt-opencode")).toBeInTheDocument();
 
-    fireEvent.click(within(prompt).getByRole("button", { name: "Yes" }));
+    fireEvent.click(within(codex).getByRole("button", { name: "Yes" }));
 
     await waitFor(() => expect(api.commandNames()).toContain("codex_hooks_enable"));
-    expect(await screen.findByTestId("hook-prompt-message")).toHaveTextContent(/waiting on you/i);
+    expect(await screen.findByTestId("hook-prompt-message-codex")).toHaveTextContent(
+      /waiting on you/i,
+    );
   });
 
-  it("remembers Not now, so the same offer is not made every launch", async () => {
+  it("installs the OpenCode bridge through its own command", async () => {
+    const api = createFakeApi();
+    render(<HoverSurface api={api} pollMs={0} />);
+
+    const opencode = await screen.findByTestId("hook-prompt-opencode");
+    expect(within(opencode).getByText(/show when OpenCode waits on you/i)).toBeInTheDocument();
+    fireEvent.click(within(opencode).getByRole("button", { name: "Yes" }));
+
+    await waitFor(() => expect(api.commandNames()).toContain("opencode_hooks_enable"));
+    expect(await screen.findByTestId("hook-prompt-message-opencode")).toHaveTextContent(
+      /Restart OpenCode/i,
+    );
+  });
+
+  it("remembers Not now per engine, so dismissing one does not dismiss the other", async () => {
     const api = createFakeApi();
     const first = render(<HoverSurface api={api} pollMs={0} />);
-    const prompt = await screen.findByTestId("hook-prompt");
-    fireEvent.click(within(prompt).getByRole("button", { name: "Not now" }));
-    expect(screen.queryByTestId("hook-prompt")).toBeNull();
+    const codex = await screen.findByTestId("hook-prompt-codex");
+    fireEvent.click(within(codex).getByRole("button", { name: "Not now" }));
+    expect(screen.queryByTestId("hook-prompt-codex")).toBeNull();
+    // OpenCode's offer is untouched by Codex's dismissal.
+    expect(screen.getByTestId("hook-prompt-opencode")).toBeInTheDocument();
     expect(window.localStorage.getItem("pigeon.codex-hooks-dismissed")).toBe("true");
 
-    // A fresh window on the same machine must not ask again.
+    // A fresh window on the same machine must not ask about Codex again, but still asks OpenCode.
     first.unmount();
     render(<HoverSurface api={createFakeApi()} pollMs={0} />);
     await screen.findByTestId("live-hover");
-    expect(screen.queryByTestId("hook-prompt")).toBeNull();
+    await waitFor(() => expect(screen.queryByTestId("hook-prompt-codex")).toBeNull());
+    expect(screen.getByTestId("hook-prompt-opencode")).toBeInTheDocument();
   });
 
-  it("never offers it when the host already has the hook", async () => {
+  it("never offers an engine whose bridge is already installed", async () => {
     const api = createFakeApi();
     await api.codexHooksEnable();
+    await api.opencodeHooksEnable();
     render(<HoverSurface api={api} pollMs={0} />);
 
     await screen.findByTestId("live-hover");
-    await waitFor(() => expect(api.commandNames()).toContain("codex_hooks_status"));
-    expect(screen.queryByTestId("hook-prompt")).toBeNull();
+    await waitFor(() => expect(api.commandNames()).toContain("opencode_hooks_status"));
+    expect(screen.queryByTestId("hook-prompt-codex")).toBeNull();
+    expect(screen.queryByTestId("hook-prompt-opencode")).toBeNull();
   });
 });
 

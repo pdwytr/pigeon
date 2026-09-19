@@ -44,6 +44,9 @@ const SIGNATURES: Record<string, string[]> = {
   codex_hooks_status: [],
   codex_hooks_enable: [],
   codex_hooks_disable: [],
+  opencode_hooks_status: [],
+  opencode_hooks_enable: [],
+  opencode_hooks_disable: [],
 };
 
 /** command -> the keys its Rust signature REQUIRES. The table above says which keys are allowed;
@@ -75,6 +78,9 @@ const REQUIRED: Record<string, string[]> = {
   codex_hooks_status: [],
   codex_hooks_enable: [],
   codex_hooks_disable: [],
+  opencode_hooks_status: [],
+  opencode_hooks_enable: [],
+  opencode_hooks_disable: [],
 };
 
 const KEY = { providerId: "claude-code" as const, sid: "0199-a-complete-uuid" };
@@ -106,6 +112,9 @@ async function callEveryCommand() {
   await api.codexHooksStatus();
   await api.codexHooksEnable();
   await api.codexHooksDisable();
+  await api.opencodeHooksStatus();
+  await api.opencodeHooksEnable();
+  await api.opencodeHooksDisable();
 }
 
 describe("the invoke payload", () => {

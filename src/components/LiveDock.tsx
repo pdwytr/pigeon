@@ -10,17 +10,21 @@ export interface LiveDockProps {
   accounts: Partial<Record<AccountStatus["provider"], AccountStatus>>;
   loading: boolean;
   problem: string | null;
-  /** The Codex waiting-on-you offer, when there is one to make. */
-  hookPrompt?: HookPrompt | null;
+  /** The waiting-on-you offers, when there are any to make. One per engine. */
+  hookPrompts?: HookPrompt[];
 }
 
 /**
- * The one owner decision this app asks for: may Pigeon see when Codex is waiting on you?
+ * The owner decisions this app asks for: may Pigeon see when an engine is waiting on you?
  *
- * It is an offer rather than an error, so it never hides a session or blocks the window. `answer`
+ * Each is an offer rather than an error, so it never hides a session or blocks the window. `answer`
  * is what Pigeon's own command said, so a refused install is reported rather than assumed.
  */
 export interface HookPrompt {
+  /** Which engine's bridge this offer is for. Drives the testid and the sentence. */
+  engine: "codex" | "opencode";
+  /** The offer sentence shown while `asking`. */
+  offer: string;
   state: "asking" | "working" | "answered";
   message: string | null;
   onEnable(): void;
@@ -34,7 +38,7 @@ export function LiveDock({
   accounts,
   loading,
   problem,
-  hookPrompt,
+  hookPrompts,
 }: LiveDockProps) {
   const [limitsOpen, setLimitsOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -105,27 +109,29 @@ export function LiveDock({
               </aside>
             ) : (
               <div className="dock-wing dock-wing-sessions">
-                {hookPrompt ? (
-                  <div className="dock-hook-prompt" data-testid="hook-prompt">
-                    {hookPrompt.state === "asking" ? (
+                {(hookPrompts ?? []).map((prompt) => (
+                  <div
+                    className="dock-hook-prompt"
+                    data-testid={`hook-prompt-${prompt.engine}`}
+                    key={prompt.engine}
+                  >
+                    {prompt.state === "asking" ? (
                       <>
-                        <span>Pigeon can show when Codex waits on you.</span>
-                        <button type="button" onClick={hookPrompt.onEnable}>
+                        <span>{prompt.offer}</span>
+                        <button type="button" onClick={prompt.onEnable}>
                           Yes
                         </button>
-                        <button type="button" onClick={hookPrompt.onDismiss}>
+                        <button type="button" onClick={prompt.onDismiss}>
                           Not now
                         </button>
                       </>
                     ) : (
-                      <span data-testid="hook-prompt-message">
-                        {hookPrompt.state === "working"
-                          ? "Setting up…"
-                          : (hookPrompt.message ?? "Done.")}
+                      <span data-testid={`hook-prompt-message-${prompt.engine}`}>
+                        {prompt.state === "working" ? "Setting up…" : (prompt.message ?? "Done.")}
                       </span>
                     )}
                   </div>
-                ) : null}
+                ))}
                 {problem ? (
                   <p className="dock-message" role="status" data-testid="hover-problem">
                     {problem}

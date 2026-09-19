@@ -275,7 +275,8 @@ as running.
   (seen with `lsof`), which maps the process to its session exactly; the rollout's last event
   (`task_started` / `task_complete` / `turn_aborted`) says whether a turn is in flight.
 - A live OpenCode process exposes its working directory; its database marks an assistant message
-  complete or not, and has a `permission` table for pending approvals.
+  complete or not. Its `permission` table holds *saved rules*, not pending asks; a pending ask is
+  visible only in-process, so Pigeon reads it from an installed plugin bridge (FR-21b).
 **Acceptance.**
 - A1. The state of a Claude Code session changes on screen within 5 seconds of the CLI changing it.
 - A2. A session the owner resumes from pigeon shows **running**/**waiting** from its own console's
@@ -524,8 +525,11 @@ that owned process.
   and read **running**; stated on the badge's hover text.
 - OpenCode's `permission` table held zero rows during a measured live `external_directory` approval
   (2026-09-18, an 8.6-minute wait): the table holds *saved rules*, and a pending ask lives only in
-  the running process. The event stream's pending part is the on-disk signal; a wait it does not
-  record reads **running**, and the owner-wait policy returns a stated absence rather than a guess.
+  the running process. Pigeon therefore offers to install a plugin bridge that records
+  `permission.asked` / `permission.replied` with the session id
+  (`docs/decisions/0004-opencode-permission-bridge.md`); without the install, a permission wait it
+  cannot see reads **running** and the owner-wait policy returns a stated absence rather than a
+  guess.
 - Codex's `input_tokens` **includes** the cached portion; the studio subtracts it so the six
   counters carry Anthropic semantics (full prompt = input + cache read + cache write). Pigeon does
   the same, and fails loud if cached exceeds input.

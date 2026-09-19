@@ -17,8 +17,10 @@ import { formatClock } from "./format";
 import { hoverSessions } from "./store/selectors";
 import "./styles/feather.css";
 
-/** "Not now" has to survive a restart, or the same offer is made on every launch. */
-const HOOKS_DISMISSED_KEY = "pigeon.codex-hooks-dismissed";
+/** "Not now" has to survive a restart, or the same offer is made on every launch. One key per
+ *  engine, so dismissing the Codex offer does not silently dismiss OpenCode's. */
+const CODEX_DISMISSED_KEY = "pigeon.codex-hooks-dismissed";
+const OPENCODE_DISMISSED_KEY = "pigeon.opencode-hooks-dismissed";
 
 /** How long a finished install explains itself before the banner folds away. */
 const HOOKS_MESSAGE_MS = 6000;
@@ -39,26 +41,59 @@ export default function HoverSurface({ api, pollMs = 5000 }: HoverSurfaceProps) 
    *  that is merely late must not blank a window the owner is reading. */
   const [loading, setLoading] = useState(true);
   const [problem, setProblem] = useState<string | null>(null);
-  const [hookPrompt, setHookPrompt] = useState<HookPrompt | null>(null);
+  const [hookPrompts, setHookPrompts] = useState<HookPrompt[]>([]);
   const messageTimer = useRef<number | undefined>(undefined);
 
-  const dismissHooks = useCallback(() => {
-    window.localStorage.setItem(HOOKS_DISMISSED_KEY, "true");
-    setHookPrompt(null);
+  const setPrompt = useCallback((engine: HookPrompt["engine"], next: HookPrompt | null) => {
+    setHookPrompts((current) => {
+      const others = current.filter((prompt) => prompt.engine !== engine);
+      return next ? [...others, next] : others;
+    });
   }, []);
 
-  const enableHooks = useCallback(async () => {
-    setHookPrompt({ state: "working", message: null, onEnable: () => {}, onDismiss: () => {} });
-    let message: string;
-    try {
-      const report = await api.codexHooksEnable();
-      message = report.message;
-    } catch {
-      message = "Codex did not accept the change.";
-    }
-    setHookPrompt({ state: "answered", message, onEnable: () => {}, onDismiss: () => {} });
-    messageTimer.current = window.setTimeout(() => setHookPrompt(null), HOOKS_MESSAGE_MS);
-  }, [api]);
+  const dismissHooks = useCallback(
+    (engine: HookPrompt["engine"]) => {
+      window.localStorage.setItem(
+        engine === "codex" ? CODEX_DISMISSED_KEY : OPENCODE_DISMISSED_KEY,
+        "true",
+      );
+      setPrompt(engine, null);
+    },
+    [setPrompt],
+  );
+
+  const enableHooks = useCallback(
+    async (engine: HookPrompt["engine"]) => {
+      const idle = { onEnable: () => {}, onDismiss: () => {} };
+      setPrompt(engine, {
+        engine,
+        offer: "",
+        state: "working",
+        message: null,
+        ...idle,
+      });
+      let message: string;
+      try {
+        const report =
+          engine === "codex" ? await api.codexHooksEnable() : await api.opencodeHooksEnable();
+        message = report.message;
+      } catch {
+        message =
+          engine === "codex"
+            ? "Codex did not accept the change."
+            : "OpenCode did not accept the change.";
+      }
+      setPrompt(engine, {
+        engine,
+        offer: "",
+        state: "answered",
+        message,
+        ...idle,
+      });
+      messageTimer.current = window.setTimeout(() => setPrompt(engine, null), HOOKS_MESSAGE_MS);
+    },
+    [api, setPrompt],
+  );
 
   const load = useCallback(async () => {
     // Settled rather than all: a status read that fails must not also blank the rows, and a row
@@ -101,7 +136,7 @@ export default function HoverSurface({ api, pollMs = 5000 }: HoverSurfaceProps) 
     };
   }, [api, load, pollMs]);
 
-  // The Codex waiting-on-you offer, asked once per window.
+  // The waiting-on-you offers, asked once per window.
   //
   // **A failure here is silent on purpose.** This is an optional capability, not a session read:
   // a host that cannot answer it, or an owner who already said no, must not be shown a problem
@@ -109,24 +144,47 @@ export default function HoverSurface({ api, pollMs = 5000 }: HoverSurfaceProps) 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      try {
-        const { installed } = await api.codexHooksStatus();
-        if (cancelled || installed) return;
-        if (window.localStorage.getItem(HOOKS_DISMISSED_KEY) === "true") return;
-        setHookPrompt({
-          state: "asking",
-          message: null,
-          onEnable: () => void enableHooks(),
-          onDismiss: dismissHooks,
-        });
-      } catch {
-        /* no offer, no complaint */
+      const offers: {
+        engine: HookPrompt["engine"];
+        offer: string;
+        dismissedKey: string;
+        installed(): Promise<{ installed: boolean }>;
+      }[] = [
+        {
+          engine: "codex",
+          offer: "Pigeon can show when Codex waits on you.",
+          dismissedKey: CODEX_DISMISSED_KEY,
+          installed: () => api.codexHooksStatus(),
+        },
+        {
+          engine: "opencode",
+          offer: "Pigeon can show when OpenCode waits on you.",
+          dismissedKey: OPENCODE_DISMISSED_KEY,
+          installed: () => api.opencodeHooksStatus(),
+        },
+      ];
+      for (const candidate of offers) {
+        try {
+          const { installed } = await candidate.installed();
+          if (cancelled || installed) continue;
+          if (window.localStorage.getItem(candidate.dismissedKey) === "true") continue;
+          setPrompt(candidate.engine, {
+            engine: candidate.engine,
+            offer: candidate.offer,
+            state: "asking",
+            message: null,
+            onEnable: () => void enableHooks(candidate.engine),
+            onDismiss: () => dismissHooks(candidate.engine),
+          });
+        } catch {
+          /* no offer, no complaint */
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, dismissHooks, enableHooks]);
+  }, [api, dismissHooks, enableHooks, setPrompt]);
 
   useEffect(
     () => () => {
@@ -146,7 +204,7 @@ export default function HoverSurface({ api, pollMs = 5000 }: HoverSurfaceProps) 
       accounts={accounts}
       loading={loading}
       problem={problem}
-      hookPrompt={hookPrompt}
+      hookPrompts={hookPrompts}
     />
   );
 }

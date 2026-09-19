@@ -384,13 +384,15 @@ with step data.
 `{type, key}` (here `opencode` and `opencode-go`). Pigeon reports provider names and `type` only;
 `key` is never deserialised. `SELECT email FROM account LIMIT 1` when the table has rows (0 here).
 
-**2.3.5 Live status.** Processes named `opencode`; cwd from the process table. A session is
-attached to a live process when its normalised `directory` equals the process cwd; when several
-sessions share the directory the most recently updated is the attached one and the others have
-no status. Turn state: the session's newest `message` with `role == "assistant"`: `data.time.
-completed` null → running; present (`finish` e.g. `stop`) → finished. `permission` rows whose
-`project_id` equals the session's project → **needs you** (0 rows at measurement; semantics to be
-confirmed at first occurrence, OQ-4).
+**2.3.5 Live status.** Processes named `opencode`. A process is attached to a session by the
+installed bridge plugin's newest claim for its pid (FR-21b); with no claim, the fallback is cwd —
+and only when **exactly one** discovered session shares that folder, because a cwd is a folder and
+two sessions can share one (measured 2026-09-18: two live processes in one folder both resolved to
+the same session and collapsed into one row). Two or more sessions in a folder with no claim means
+**no attribution**, not a guess. Turn state: the session's newest `message` with
+`role == "assistant"`: `data.time.completed` null → running; present (`finish` e.g. `stop`) →
+finished. An outstanding `permission.asked` from the bridge → **needs you**; the `permission` table
+holds *saved rules*, not pending asks (0 rows during a live ask, measured 2026-09-18).
 
 **2.3.6 Capacity.** None: OpenCode is provider-agnostic and states no allowance. The card says
 "capacity not exposed by this engine". `opencode` supports `--session <id>`; `--fork` exists and is
@@ -735,12 +737,30 @@ for the three event types.
 **Statement.** The OpenCode status source MUST attach live `opencode` processes to sessions per
 §2.3.5 every `pollIntervalSeconds`.
 **Behaviour.** Process cwd (normalised) ↔ `directory`; newest `time_updated` wins; the newest
-assistant message's `time.completed` decides running vs finished; a `permission` row for the
-project → needs you (the newest session in that directory carries it). `since_ms` = the message's
-`time.completed` or `time.created`.
+assistant message's `time.completed` decides running vs finished; an outstanding `permission.asked`
+from the installed bridge plugin → needs you (see FR-21b); a `question` tool part → needs you.
+`since_ms` = the message's `time.completed` or `time.created`.
 **Tests.** T-21.1 fixture DB + a fake process list → states; T-21.2 two sessions in one directory →
 one attached, one with no status.
 **Traces.** UR-7, UR-15. **Origin.** agent.
+
+### FR-21b OpenCode bridge plugin
+**Statement.** Because OpenCode persists neither a pending permission ask nor a process→session link
+(measured 2026-09-18: the `permission` table holds saved rules only, zero rows during a live ask; a
+process holds no per-session file, socket or port), Pigeon MUST offer to install a small plugin
+under `~/.config/opencode/plugins/` that appends `permission.asked` / `permission.replied` and its
+own pid's session claims to Pigeon's own JSONL, and read it.
+**Behaviour.** One consented offer per engine in the hover; reversible via `opencode_hooks_disable`;
+identified by a marker read back from the file; the reader tracks request ids so a reply clears only
+its own ask, and tracks claims per pid with a start-time guard so a reused pid is never attributed
+to a dead process's session. Never writes `~/.local/share/opencode`.
+**Tests.** T-21b.1 plugin source embeds the event path as a JSON literal and records pid/start;
+T-21b.2 install/uninstall round-trips in a temp config dir; T-21b.3 a foreign file of the same name
+is not Pigeon's; T-21b.4 a pending ask promotes the session and a reply clears it; T-21b.5 a reply
+for one ask does not clear a second; T-21b.6 the newest claim wins and a subagent claim is skipped;
+T-21b.7 a reused pid's old claim is not attributed to the new process; T-21b.8 two pids in one
+folder each claim their own session.
+**Traces.** UR-7, UR-15. **Origin.** owner (the report); agent (the measurement).
 
 ### FR-22 Live status model, decision table and snapshot
 **Statement.** The host MUST combine the sources into one `StatusSnapshot` per §6 and emit it.
@@ -1117,7 +1137,7 @@ Evaluated per `(engine, sid)` in order; the first matching row decides.
 | 7b | Codex process attached, tail last turn event `task_started`, or a `user_message` after a closing event | **running** | newest work record ts |
 | 8 | Codex process attached, tail `task_complete` / `turn_aborted` / `error` | **finished** | event ts |
 | 9 | Codex process attached, no turn event found | **unknown** ("no turn event in tail") | process start |
-| 10 | OpenCode process in the directory, this is its newest session, a pending approval in the event stream or a `permission` row for its project | **needs you** | pending event, else permission `time_created` |
+| 10 | OpenCode process in the directory, this is its newest session, an outstanding `permission.asked` from the bridge plugin or a pending approval part in the event stream | **needs you** | pending event |
 | 10b | OpenCode process, newest session, newest part is a `question` tool `running`/`pending` | **needs you** | part `time_updated` |
 | 11 | OpenCode process, newest session, newest assistant message `time.completed == null` and no owner case outstanding | **running** | message `time.created` |
 | 12 | OpenCode process, newest session, newest assistant message completed, or `MessageAbortedError` on it | **finished** | `time.completed` |

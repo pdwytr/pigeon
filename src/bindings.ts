@@ -302,6 +302,20 @@ export interface CodexHooksReport {
   message: string;
 }
 
+/** Whether Pigeon can see OpenCode waiting on the owner. */
+export interface OpenCodeHooksStatus {
+  installed: boolean;
+}
+
+/**
+ * What one OpenCode bridge install attempt did. There is no trust step — OpenCode loads every
+ * plugin in its directory — so `installed` is the whole answer.
+ */
+export interface OpenCodeHooksReport {
+  installed: boolean;
+  message: string;
+}
+
 export interface Settings {
   hover: {
     visible: boolean;

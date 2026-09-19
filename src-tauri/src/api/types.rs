@@ -32,6 +32,23 @@ pub struct CodexHooksReportDto {
     pub message: String,
 }
 
+/// Whether Pigeon can see OpenCode waiting on the owner, and whether it already does.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenCodeHooksStatusDto {
+    pub installed: bool,
+}
+
+/// What one OpenCode bridge install attempt did. Unlike Codex there is no trust step — OpenCode
+/// loads every plugin in the directory — so `installed` is the whole answer, and the message says
+/// whether a restart is needed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenCodeHooksReportDto {
+    pub installed: bool,
+    pub message: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostInfo {

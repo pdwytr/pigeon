@@ -26,6 +26,8 @@ import {
   EV_STATUS_CHANGED,
   type HostInfo,
   type MetricState,
+  type OpenCodeHooksReport,
+  type OpenCodeHooksStatus,
   type ProjectSummaryResult,
   type ProviderId,
   type Scope,
@@ -113,6 +115,9 @@ export function createTauriApi(): FeatherApi {
     codexHooksStatus: () => call<CodexHooksStatus>("codex_hooks_status"),
     codexHooksEnable: () => call<CodexHooksReport>("codex_hooks_enable"),
     codexHooksDisable: () => call<void>("codex_hooks_disable"),
+    opencodeHooksStatus: () => call<OpenCodeHooksStatus>("opencode_hooks_status"),
+    opencodeHooksEnable: () => call<OpenCodeHooksReport>("opencode_hooks_enable"),
+    opencodeHooksDisable: () => call<void>("opencode_hooks_disable"),
 
     onSessionsChanged: (cb) => on<SessionsChangedPayload>(EV_SESSIONS_CHANGED, cb),
     onSessionsMetrics: (cb) => on<SessionsMetricsEvent>(EV_SESSIONS_METRICS, cb),
