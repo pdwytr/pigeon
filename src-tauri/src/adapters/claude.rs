@@ -1296,6 +1296,11 @@ const QUESTION_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 /// contract's table. All four mean the same thing here.
 const CLAUDE_PERMISSION_WORDS: [&str; 4] = ["needs_input", "blocked", "permission", "waiting"];
 
+/// A child transcript with no new bytes beyond this window is not enough to claim live work. A
+/// crashed or quota-stopped child can end on a tool call forever; 15 minutes leaves room for a
+/// slow tool while preventing historical sidecars from keeping the parent delegated indefinitely.
+const SUBAGENT_ACTIVE_GRACE_MS: i64 = 15 * 60 * 1_000;
+
 /// What a Claude transcript tail says about the owner, split into the three cases so the shared
 /// [`WaitPolicy`] can order them. A single `LiveState` could not distinguish a question from an
 /// interruption, which is exactly the conflation this module exists to remove.
@@ -1449,7 +1454,11 @@ pub fn claude_subagent_facts(root: &Path, sid: &str) -> Option<ClaudeSubagentFac
         let Ok(tail) = read_tail(&path, 64 * 1024) else {
             continue;
         };
-        if subagent_tail_is_active(&tail) {
+        let fresh = std::fs::metadata(&path)
+            .ok()
+            .map(|meta| subagent_is_fresh(mtime_ms(&meta), now_ms()))
+            .unwrap_or(false);
+        if fresh && subagent_tail_is_active(&tail) {
             facts.active += 1;
         }
     }
@@ -1476,6 +1485,10 @@ fn subagent_tail_is_active(tail: &str) -> bool {
         }
     }
     false
+}
+
+fn subagent_is_fresh(modified_ms: i64, now_ms: i64) -> bool {
+    now_ms.saturating_sub(modified_ms) <= SUBAGENT_ACTIVE_GRACE_MS
 }
 
 /// Walk a transcript tail backwards and classify the newest record.
@@ -2655,6 +2668,8 @@ mod tests {
         assert!(!subagent_tail_is_active(
             r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#
         ));
+        assert!(subagent_is_fresh(1_000, 1_000 + SUBAGENT_ACTIVE_GRACE_MS));
+        assert!(!subagent_is_fresh(1_000, 1_001 + SUBAGENT_ACTIVE_GRACE_MS));
     }
 
     #[test]
