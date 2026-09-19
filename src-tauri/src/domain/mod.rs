@@ -20,5 +20,6 @@ pub use session::{
     SourceSignature, SourceSummary, NO_DIRECTORY,
 };
 pub use status::{
-    LiveObservation, LiveSignature, LiveState, ProcessPresence, SessionStatus, StatusSnapshot,
+    LiveCounts, LiveObservation, LiveSignature, LiveState, ProcessPresence, SessionStatus,
+    StatusSnapshot,
 };

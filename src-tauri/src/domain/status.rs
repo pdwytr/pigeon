@@ -95,6 +95,14 @@ pub struct StatusSnapshot {
     pub live: Vec<LiveObservation>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LiveCounts {
+    pub running: u32,
+    pub needs_you: u32,
+    pub finished: u32,
+    pub unknown: u32,
+}
+
 impl StatusSnapshot {
     /// What this snapshot *says*, with the clock left out.
     ///
@@ -126,19 +134,17 @@ impl StatusSnapshot {
     }
 
     /// Counts over live entries only. A closed session contributes to nothing here.
-    pub fn counts(&self) -> (u32, u32, u32) {
-        let mut running = 0;
-        let mut needs_you = 0;
-        let mut unknown = 0;
+    pub fn counts(&self) -> LiveCounts {
+        let mut counts = LiveCounts::default();
         for obs in &self.live {
             match obs.state {
-                LiveState::Running | LiveState::Delegating => running += 1,
-                LiveState::Waiting => {}
-                LiveState::NeedsYou => needs_you += 1,
-                LiveState::Unknown => unknown += 1,
+                LiveState::Running | LiveState::Delegating => counts.running += 1,
+                LiveState::Waiting => counts.finished += 1,
+                LiveState::NeedsYou => counts.needs_you += 1,
+                LiveState::Unknown => counts.unknown += 1,
             }
         }
-        (running, needs_you, unknown)
+        counts
     }
 }
 
@@ -172,7 +178,8 @@ mod tests {
                 obs(LiveState::NeedsYou),
             ],
         };
-        assert_eq!(snap.counts(), (2, 1, 0));
+        assert_eq!(snap.counts().running, 2);
+        assert_eq!(snap.counts().needs_you, 1);
     }
 
     #[test]
@@ -228,7 +235,7 @@ mod tests {
 
     #[test]
     fn an_empty_snapshot_counts_nothing() {
-        assert_eq!(StatusSnapshot::default().counts(), (0, 0, 0));
+        assert_eq!(StatusSnapshot::default().counts(), LiveCounts::default());
     }
 
     #[test]
@@ -241,6 +248,6 @@ mod tests {
             generated_at_ms: 1,
             live: vec![obs(LiveState::Delegating)],
         };
-        assert_eq!(snap.counts(), (1, 0, 0));
+        assert_eq!(snap.counts().running, 1);
     }
 }

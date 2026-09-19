@@ -10,10 +10,11 @@ use std::sync::Arc;
 use crate::adapters::{claude, codex, opencode, ProviderAdapter};
 use crate::api::errors::{EngineError, ErrorKind};
 use crate::app_state::LiveStatus;
-use crate::domain::{MetricBasis, Metrics, ProviderId, Session, SessionKey, StatusSnapshot};
+use crate::domain::{MetricBasis, Metrics, ProviderId, Session, SessionKey};
 use crate::services::metrics::MetricSource;
 use crate::services::status::{
-    OpenCodeAttribution, OpenCodeAttributor, OpenCodeProcess, StatusService, StopOutcome,
+    OpenCodeAttribution, OpenCodeAttributor, OpenCodeProcess, StatusReport, StatusService,
+    StopOutcome,
 };
 
 /// Attributes a live OpenCode process to its session, **exactly** when the installed bridge can
@@ -195,18 +196,15 @@ pub fn status_service() -> StatusService {
 
 /// The real status service behind the [`LiveStatus`] seam.
 ///
-/// A newtype rather than an `impl LiveStatus for StatusService`, because the trait method and the
-/// service's own inherent method would both be called `snapshot` and the resolution rule is not
-/// something a reader should have to recall.
+/// A newtype rather than an `impl LiveStatus for StatusService`, so the seam the services are
+/// tested against stays a trait the host happens to satisfy rather than the service itself.
 pub struct HostStatus(pub Arc<StatusService>);
 
 impl LiveStatus for HostStatus {
-    fn snapshot(&self) -> StatusSnapshot {
-        self.0.snapshot().snapshot
-    }
-
-    fn problems(&self) -> Vec<EngineError> {
-        self.0.snapshot().problems
+    /// One call into the service, so the snapshot and its problems are the same pass. Two calls
+    /// here could straddle `SNAPSHOT_TTL` and describe two — see [`LiveStatus::observe`].
+    fn observe(&self) -> StatusReport {
+        self.0.snapshot()
     }
 
     fn stop_session(&self, key: &SessionKey) -> Result<StopOutcome, EngineError> {

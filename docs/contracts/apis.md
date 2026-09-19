@@ -90,7 +90,7 @@ interface SessionRow extends Session {
   status: SessionStatus | null;
 }
 
-type SessionStatus = "running" | "needs_you" | "finished" | "unknown";
+type SessionStatus = "running" | "delegating" | "needs_you" | "finished" | "unknown";
 
 type MetricState =
   | { state: "pending" }
@@ -201,6 +201,7 @@ interface StatusSnapshot {
   counts: {
     running: number;
     needsYou: number;
+    finished: number;
     unknown: number;
   };
   live: LiveSessionState[];

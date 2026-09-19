@@ -652,6 +652,7 @@ export class FakeFeatherApi implements FeatherApi {
       counts: {
         running: live.filter((l) => l.state === "running").length,
         needsYou: live.filter((l) => l.state === "needs_you").length,
+        finished: live.filter((l) => l.state === "waiting").length,
         unknown: live.filter((l) => l.state === "unknown").length,
       },
       live,

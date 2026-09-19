@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 
 use crate::api::errors::EngineError;
 use crate::domain::{
-    AccountStatus, Capacity, CapacityWindow, Identity, Kpis, LiveObservation, LiveState,
-    MetricState, Metrics, MetricsTotals, ProjectSummary, ProviderId, ProviderSummary, Session,
-    SessionKey, SessionStatus, StatusCounts, StatusSnapshot,
+    AccountStatus, Capacity, CapacityWindow, Identity, Kpis, LiveCounts, LiveObservation,
+    LiveState, MetricState, Metrics, MetricsTotals, ProjectSummary, ProviderId, ProviderSummary,
+    Session, SessionKey, SessionStatus, StatusCounts, StatusSnapshot,
 };
 use crate::util::repository_name;
 
@@ -309,6 +309,7 @@ impl LiveSessionStateDto {
 pub struct StatusCountsDto {
     pub running: u32,
     pub needs_you: u32,
+    pub finished: u32,
     pub unknown: u32,
 }
 
@@ -327,12 +328,18 @@ impl StatusSnapshotDto {
         snapshot: &StatusSnapshot,
         lookup: impl Fn(&SessionKey) -> (Option<String>, Option<String>, Option<String>),
     ) -> Self {
-        let (running, needs_you, unknown) = snapshot.counts();
+        let LiveCounts {
+            running,
+            needs_you,
+            finished,
+            unknown,
+        } = snapshot.counts();
         Self {
             generated_at_ms: snapshot.generated_at_ms,
             counts: StatusCountsDto {
                 running,
                 needs_you,
+                finished,
                 unknown,
             },
             live: snapshot

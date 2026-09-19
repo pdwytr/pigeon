@@ -1285,6 +1285,7 @@ struct CodexLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::LiveCounts;
     use std::sync::Mutex;
 
     /// A planted prompt. If this string ever reaches an evidence sentence, a private prompt has
@@ -1464,6 +1465,15 @@ mod tests {
     const SID_A: &str = "460e1a93-2c29-4679-9ea0-a95f263ce79d";
     const SID_B: &str = "6858c8c4-71f5-4dde-907a-bcdd117984dc";
 
+    fn counts(running: u32, needs_you: u32, finished: u32, unknown: u32) -> LiveCounts {
+        LiveCounts {
+            running,
+            needs_you,
+            finished,
+            unknown,
+        }
+    }
+
     // -- 1..4: the Claude Code status file -----------------------------------------------------
 
     #[test]
@@ -1481,7 +1491,7 @@ mod tests {
         assert_eq!(obs.raw_word.as_deref(), Some("busy"));
         assert_eq!(obs.pid, Some(4123));
         assert_eq!(obs.since_ms, Some(1_789_334_207_814));
-        assert_eq!(report.snapshot.counts(), (1, 0, 0));
+        assert_eq!(report.snapshot.counts(), counts(1, 0, 0, 0));
     }
 
     #[test]
@@ -1497,7 +1507,7 @@ mod tests {
         let report = service.refresh();
         let obs = &report.snapshot.live[0];
         assert_eq!(obs.state, LiveState::Waiting);
-        assert_eq!(report.snapshot.counts(), (0, 0, 0));
+        assert_eq!(report.snapshot.counts(), counts(0, 0, 1, 0));
     }
 
     #[test]
@@ -1516,7 +1526,7 @@ mod tests {
         let report = service.refresh();
         let obs = &report.snapshot.live[0];
         assert_eq!(obs.state, LiveState::Waiting);
-        assert_eq!(report.snapshot.counts(), (0, 0, 0));
+        assert_eq!(report.snapshot.counts(), counts(0, 0, 1, 0));
     }
 
     #[test]
@@ -1532,7 +1542,7 @@ mod tests {
         let report = service.refresh();
         let obs = &report.snapshot.live[0];
         assert_eq!(obs.state, LiveState::Waiting);
-        assert_eq!(report.snapshot.counts(), (0, 0, 0));
+        assert_eq!(report.snapshot.counts(), counts(0, 0, 1, 0));
     }
 
     #[test]
@@ -1560,7 +1570,7 @@ mod tests {
         );
         // Neither is active work, but they are not the same thing: one needs the owner and one
         // does not. `needs_input` counts as needs-you, not as running and not as unknown.
-        assert_eq!(report.snapshot.counts(), (0, 1, 0));
+        assert_eq!(report.snapshot.counts(), counts(0, 1, 1, 0));
     }
 
     /// **Claude sitting on `AskUserQuestion` must not read as running.**
@@ -1582,7 +1592,7 @@ mod tests {
         let obs = &report.snapshot.live[0];
         assert_eq!(obs.state, LiveState::NeedsYou);
         assert_eq!(obs.raw_word.as_deref(), Some("needs_input"));
-        assert_eq!(report.snapshot.counts(), (0, 1, 0));
+        assert_eq!(report.snapshot.counts(), counts(0, 1, 0, 0));
     }
 
     /// **`frds.md` row 5 / T-19.4**: an `idle` file whose tail ends on an unanswered
@@ -1610,7 +1620,7 @@ mod tests {
                 LiveState::NeedsYou,
                 "{tool} left outstanding must read as needs-you"
             );
-            assert_eq!(report.snapshot.counts(), (0, 1, 0), "{tool}");
+            assert_eq!(report.snapshot.counts(), counts(0, 1, 0, 0), "{tool}");
         }
     }
 
@@ -1714,7 +1724,7 @@ mod tests {
             "the evidence names the word we did not recognise: {:?}",
             obs.evidence
         );
-        assert_eq!(report.snapshot.counts(), (0, 0, 1));
+        assert_eq!(report.snapshot.counts(), counts(0, 0, 0, 1));
     }
 
     #[test]
@@ -1729,7 +1739,11 @@ mod tests {
             report.snapshot.live.is_empty(),
             "a stale file is not a live session"
         );
-        assert_eq!(report.snapshot.counts(), (0, 0, 0));
+        // Zero, not `finished: 1`. `counts()` folds over `snapshot.live`, which the assertion
+        // above proves is empty — so no bucket can be non-zero here. A stale file from a
+        // crashed CLI is also not evidence the session *finished*: invariant 6 keeps absence
+        // and zero apart, and this session has no status at all.
+        assert_eq!(report.snapshot.counts(), counts(0, 0, 0, 0));
         assert!(
             report.problems.is_empty(),
             "a dead pid is normal, not a failure to report"
@@ -1826,7 +1840,7 @@ mod tests {
         assert_eq!(obs.key, SessionKey::new(ProviderId::Codex, thread));
         assert_eq!(obs.state, LiveState::NeedsYou);
         assert_eq!(obs.raw_word.as_deref(), Some("PermissionRequest"));
-        assert_eq!(report.snapshot.counts(), (0, 1, 0));
+        assert_eq!(report.snapshot.counts(), counts(0, 1, 0, 0));
         assert!(
             obs.evidence
                 .iter()
@@ -1867,7 +1881,7 @@ mod tests {
 
         let report = service.refresh();
         assert_eq!(report.snapshot.live[0].state, LiveState::Waiting);
-        assert_eq!(report.snapshot.counts(), (0, 0, 0));
+        assert_eq!(report.snapshot.counts(), counts(0, 0, 1, 0));
     }
 
     /// An event that is not an approval changes nothing: the rollout tail remains the authority on
@@ -1919,7 +1933,7 @@ mod tests {
         assert_eq!(keys, vec![claude_key(SID_A)]);
         assert!(!keys.contains(&claude_key(SID_B)), "no process, no row");
         // The closed one contributes to no count — not even Unknown.
-        assert_eq!(report.snapshot.counts(), (1, 0, 0));
+        assert_eq!(report.snapshot.counts(), counts(1, 0, 0, 0));
     }
 
     // -- 7, 8: stop_session --------------------------------------------------------------------
@@ -1945,7 +1959,7 @@ mod tests {
         );
 
         // The badge still counts once, because two processes are still one session to look at.
-        assert_eq!(service.refresh().snapshot.counts(), (1, 0, 0));
+        assert_eq!(service.refresh().snapshot.counts(), counts(1, 0, 0, 0));
     }
 
     #[test]
@@ -2559,10 +2573,14 @@ mod tests {
         }
         let service = StatusService::new();
         let report = service.refresh();
-        let (running, needs_you, unknown) = report.snapshot.counts();
+        let counts = report.snapshot.counts();
         println!(
-            "status smoke: {} live | running={running} needs_you={needs_you} unknown={unknown}",
-            report.snapshot.live.len()
+            "status smoke: {} live | running={} needs_you={} finished={} unknown={}",
+            report.snapshot.live.len(),
+            counts.running,
+            counts.needs_you,
+            counts.finished,
+            counts.unknown
         );
         for problem in &report.problems {
             println!(
@@ -2608,14 +2626,8 @@ mod tests {
         keys.sort();
         keys.dedup();
         assert_eq!(keys.len(), before, "one row per session key");
-        let waiting = report
-            .snapshot
-            .live
-            .iter()
-            .filter(|obs| obs.state == LiveState::Waiting)
-            .count() as u32;
         assert_eq!(
-            running + needs_you + unknown + waiting,
+            counts.running + counts.needs_you + counts.unknown + counts.finished,
             report.snapshot.live.len() as u32,
             "every live row lands in exactly one count"
         );

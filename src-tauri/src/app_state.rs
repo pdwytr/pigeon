@@ -15,6 +15,7 @@ use crate::services::accounts::AccountsService;
 use crate::services::console::ConsoleService;
 use crate::services::metrics::{MetricSource, MetricsService};
 use crate::services::sessions::SessionsService;
+use crate::services::status::StatusReport;
 use crate::settings::Settings;
 
 /// Whatever can tell us which sessions are live right now.
@@ -22,13 +23,18 @@ use crate::settings::Settings;
 /// A trait rather than a concrete type so the sessions and project services can be tested with
 /// a fixed answer, and so a status source that cannot read one engine does not have to pretend.
 pub trait LiveStatus: Send + Sync {
-    fn snapshot(&self) -> StatusSnapshot;
-
-    /// Problems from the last status pass. They travel beside the rows, exactly as an adapter's
-    /// do: an engine whose process facts we cannot read must not silently look idle.
-    fn problems(&self) -> Vec<crate::api::errors::EngineError> {
-        vec![]
-    }
+    /// One coherent look at the live world: what was seen, and the problems that came with it.
+    ///
+    /// **One call, not two.** This was a `snapshot()` beside a `problems()`, and nothing tied the
+    /// two answers to the same pass. The real source caches for one second (`SNAPSHOT_TTL`), so
+    /// two adjacent calls either side of that boundary described two different passes — the empty
+    /// live set of a failed read paired with the empty problem list of the good read that
+    /// followed. The failure then reached nobody: an empty Live tab with no stated reason, which
+    /// invariant 8 forbids, and a `degraded` set that came back empty, so every session of the
+    /// engine we could not read was recorded as having just closed.
+    ///
+    /// Returning the pair makes that split unrepresentable rather than merely discouraged.
+    fn observe(&self) -> StatusReport;
 
     /// Stop every process that can be *proven* to belong to this session. The default refuses,
     /// so a status source that cannot attribute processes cannot accidentally kill one.
@@ -53,10 +59,13 @@ pub trait LiveStatus: Send + Sync {
 pub struct NoLiveStatus;
 
 impl LiveStatus for NoLiveStatus {
-    fn snapshot(&self) -> StatusSnapshot {
-        StatusSnapshot {
-            generated_at_ms: crate::util::now_ms(),
-            live: vec![],
+    fn observe(&self) -> StatusReport {
+        StatusReport {
+            snapshot: StatusSnapshot {
+                generated_at_ms: crate::util::now_ms(),
+                live: vec![],
+            },
+            problems: vec![],
         }
     }
 }
@@ -140,7 +149,8 @@ impl AppState {
     /// say why it is empty, and whoever joins a status has to know which providers could not be
     /// asked.
     pub fn live(&self) -> LivePicture {
-        let snapshot = self.status.snapshot();
+        // Destructured from ONE observation. See `LiveStatus::observe`.
+        let StatusReport { snapshot, problems } = self.status.observe();
         let keys: HashSet<SessionKey> = snapshot.live.iter().map(|o| o.key.clone()).collect();
         let statuses: HashMap<SessionKey, SessionStatus> = snapshot
             .live
@@ -148,7 +158,6 @@ impl AppState {
             .map(|o| (o.key.clone(), SessionStatus::from(o.state)))
             .collect();
 
-        let problems = self.status.problems();
         let degraded: HashSet<ProviderId> = problems.iter().filter_map(|p| p.provider).collect();
 
         // Record any session that has just stopped being live, so Recent can order by close time
@@ -204,14 +213,14 @@ mod tests {
     struct ProblemStatus(Vec<EngineError>);
 
     impl LiveStatus for ProblemStatus {
-        fn snapshot(&self) -> StatusSnapshot {
-            StatusSnapshot {
-                generated_at_ms: 1,
-                live: vec![],
+        fn observe(&self) -> StatusReport {
+            StatusReport {
+                snapshot: StatusSnapshot {
+                    generated_at_ms: 1,
+                    live: vec![],
+                },
+                problems: self.0.clone(),
             }
-        }
-        fn problems(&self) -> Vec<EngineError> {
-            self.0.clone()
         }
     }
 
@@ -233,10 +242,13 @@ mod tests {
 
     #[test]
     fn an_unwired_status_source_reports_nothing_live_rather_than_everything() {
-        let snap = NoLiveStatus.snapshot();
-        assert!(snap.live.is_empty());
-        assert_eq!(snap.counts(), (0, 0, 0));
-        assert!(NoLiveStatus.problems().is_empty());
+        let report = NoLiveStatus.observe();
+        assert!(report.snapshot.live.is_empty());
+        assert_eq!(
+            report.snapshot.counts(),
+            crate::domain::LiveCounts::default()
+        );
+        assert!(report.problems.is_empty());
     }
 
     #[test]
@@ -272,5 +284,70 @@ mod tests {
         let state = state_with(Arc::new(ProblemStatus(vec![by_design, real.clone()])));
         let picture = state.live();
         assert_eq!(picture.problems, vec![real]);
+    }
+
+    /// A status source where every trait call lands on a *different* pass — which is exactly what
+    /// the real one does whenever two calls straddle `SNAPSHOT_TTL` (one second,
+    /// `services/status.rs`). Pass 1 could not read Codex; pass 2 read it cleanly.
+    struct EachReadIsANewPass {
+        passes: Mutex<std::collections::VecDeque<crate::services::status::StatusReport>>,
+    }
+
+    impl EachReadIsANewPass {
+        fn next_pass(&self) -> crate::services::status::StatusReport {
+            self.passes
+                .lock()
+                .expect("no test thread panics holding this")
+                .pop_front()
+                .unwrap_or_default()
+        }
+    }
+
+    impl LiveStatus for EachReadIsANewPass {
+        fn observe(&self) -> StatusReport {
+            self.next_pass()
+        }
+    }
+
+    #[test]
+    fn one_look_at_the_live_world_keeps_its_snapshot_and_its_problems_together() {
+        // Read as two calls, `live()` pairs pass 1's empty live set with pass 2's empty problem
+        // list, and an empty answer that has lost the reason it is empty is the one lie
+        // invariant 8 forbids: the owner sees an idle machine instead of an engine we could not
+        // read. Worse, `degraded` comes back empty, so `observe_live` records every Codex session
+        // as having just closed on the strength of a failed read.
+        let unreadable = EngineError::of(ProviderId::Codex, ErrorKind::Io);
+        let could_not_look = crate::services::status::StatusReport {
+            snapshot: StatusSnapshot {
+                generated_at_ms: 1,
+                live: vec![],
+            },
+            problems: vec![unreadable.clone()],
+        };
+        let read_it_fine = crate::services::status::StatusReport {
+            snapshot: StatusSnapshot {
+                generated_at_ms: 2,
+                live: vec![],
+            },
+            problems: vec![],
+        };
+        let state = state_with(Arc::new(EachReadIsANewPass {
+            passes: Mutex::new(std::collections::VecDeque::from(vec![
+                could_not_look,
+                read_it_fine,
+            ])),
+        }));
+
+        let picture = state.live();
+
+        assert_eq!(
+            picture.problems,
+            vec![unreadable],
+            "the reason the live set is empty must survive the look"
+        );
+        assert!(
+            picture.degraded.contains(&ProviderId::Codex),
+            "and the provider stays degraded, so its sessions are not recorded as closed"
+        );
     }
 }

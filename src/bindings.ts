@@ -163,7 +163,7 @@ export interface LiveSessionState {
 
 export interface StatusSnapshot {
   generatedAtMs: number;
-  counts: { running: number; needsYou: number; unknown: number };
+  counts: { running: number; needsYou: number; finished: number; unknown: number };
   /** Only sessions with a live engine process. A closed session is never in here. */
   live: LiveSessionState[];
 }

@@ -130,7 +130,7 @@ describe("switching from Recent to Live", () => {
     // the View must not honour anyway while the Recent scope is on screen.
     const snapshot: StatusSnapshot = {
       generatedAtMs: T0,
-      counts: { running: 1, needsYou: 0, unknown: 0 },
+      counts: { running: 1, needsYou: 0, finished: 0, unknown: 0 },
       live: [
         {
           key: closed.key,
@@ -218,7 +218,7 @@ describe("the live hover's population", () => {
     const unobserved = makeRow({ provider: "codex", sid: "unseen", title: "Not yet observed" });
     const status: StatusSnapshot = {
       generatedAtMs: T0,
-      counts: { running: 1, needsYou: 0, unknown: 0 },
+      counts: { running: 1, needsYou: 0, finished: 0, unknown: 0 },
       live: [
         {
           key: observed.key,
@@ -251,7 +251,7 @@ describe("the live hover's population", () => {
     const row = makeRow({ sid: "state-change", status: "finished" });
     const status: StatusSnapshot = {
       generatedAtMs: T0,
-      counts: { running: 1, needsYou: 0, unknown: 0 },
+      counts: { running: 1, needsYou: 0, finished: 0, unknown: 0 },
       live: [
         {
           key: row.key,
@@ -281,7 +281,7 @@ describe("a status snapshot that arrives out of order", () => {
     // from a slow one is the timestamp the host stamped on it.
     const older: StatusSnapshot = {
       generatedAtMs: T0 - 1_000,
-      counts: { running: 1, needsYou: 0, unknown: 0 },
+      counts: { running: 1, needsYou: 0, finished: 0, unknown: 0 },
       live: [
         {
           key: { providerId: "claude-code", sid: "stopped-one" },
@@ -302,7 +302,7 @@ describe("a status snapshot that arrives out of order", () => {
     };
     const newer: StatusSnapshot = {
       generatedAtMs: T0,
-      counts: { running: 0, needsYou: 0, unknown: 0 },
+      counts: { running: 0, needsYou: 0, finished: 0, unknown: 0 },
       live: [],
     };
 
@@ -418,6 +418,7 @@ describe("a row's status", () => {
       counts: {
         running: state === "running" ? 1 : 0,
         needsYou: state === "needs_you" ? 1 : 0,
+        finished: 0,
         unknown: 0,
       },
       live: [
@@ -454,7 +455,7 @@ describe("a row's status", () => {
     // the confident-wrong-answer this product exists not to give.
     const empty: StatusSnapshot = {
       generatedAtMs: 2_000,
-      counts: { running: 0, needsYou: 0, unknown: 0 },
+      counts: { running: 0, needsYou: 0, finished: 0, unknown: 0 },
       live: [],
     };
     const rows = visibleSessions(stateWith(null, empty));
