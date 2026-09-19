@@ -9,7 +9,7 @@
 //! an OpenCode row. Identical signatures must produce identical numbers, which is what makes a
 //! resume, a console close, a cache eviction and an app restart all agree.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use crate::api::errors::EngineError;
@@ -37,6 +37,43 @@ pub struct MetricsService {
     /// Keyed by session, valued by the signature it was counted at plus the result. A session
     /// whose signature has moved on is recounted; one whose signature matches is not.
     cache: Mutex<HashMap<SessionKey, Entry>>,
+    /// The sessions a fold is running for right now, so a second caller can tell "nobody has
+    /// counted this yet" from "somebody is counting it as we speak". Guarded by its own mutex and
+    /// held for one set operation, never across the fold.
+    in_flight: Mutex<HashSet<SessionKey>>,
+}
+
+/// Holds one session's in-flight claim and clears it however [`MetricsService::ensure`] leaves —
+/// including by unwinding. A claim stranded by a panicking fold would make that session
+/// permanently uncountable, which is a worse failure than the duplicate read it prevents.
+struct Claim<'a> {
+    service: &'a MetricsService,
+    key: SessionKey,
+}
+
+impl<'a> Claim<'a> {
+    /// `Some` if this caller now owns the fold, `None` if somebody else already does.
+    ///
+    /// A poisoned set yields a claim: the cost is one duplicate fold, and refusing to count at
+    /// all because a lock is poisoned would turn a slow path into a permanently empty one.
+    fn take(service: &'a MetricsService, key: &SessionKey) -> Option<Self> {
+        let claimed = match service.in_flight.lock() {
+            Ok(mut flight) => flight.insert(key.clone()),
+            Err(_) => true,
+        };
+        claimed.then(|| Self {
+            service,
+            key: key.clone(),
+        })
+    }
+}
+
+impl Drop for Claim<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut flight) = self.service.in_flight.lock() {
+            flight.remove(&self.key);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +87,7 @@ impl MetricsService {
         Self {
             source,
             cache: Mutex::new(HashMap::new()),
+            in_flight: Mutex::new(HashSet::new()),
         }
     }
 
@@ -67,14 +105,24 @@ impl MetricsService {
 
     /// Count this session now, or return the cached answer if its source has not moved.
     ///
-    /// The lock is taken twice and held for one map operation each time. The fold itself — which
-    /// can be tens of megabytes of JSONL — runs with **no** lock held, because a fold inside a
-    /// process-wide mutex would stall every other caller behind one large file.
+    /// Every lock is taken for one map or set operation. The fold itself — which can be tens of
+    /// megabytes of JSONL — runs with **no** lock held, because a fold inside a process-wide
+    /// mutex would stall every other caller behind one large file.
+    ///
+    /// **A fold already in flight is not started again.** `peek` answers Pending for the whole
+    /// duration of a fold, so the background fill and an owner opening the same row both used to
+    /// read the same 14.6 MB transcript. The second caller now returns Pending and takes the
+    /// value from the `sessions://metrics` fill event instead: rows are contracted to arrive
+    /// Pending anyway, so this costs the caller nothing it was promised, and it is the only
+    /// coalescing that does not hold a lock across the read (invariant 9).
     pub fn ensure(&self, session: &Session) -> MetricState {
         let cached = self.peek(session);
         if !matches!(cached, MetricState::Pending) {
             return cached;
         }
+        let Some(_claim) = Claim::take(self, &session.key) else {
+            return MetricState::Pending;
+        };
         let state = match self.source.read(session) {
             Ok((metrics, basis)) => MetricState::Ready {
                 metrics,
@@ -102,7 +150,11 @@ impl MetricsService {
         for session in sessions {
             if matches!(self.peek(session), MetricState::Pending) {
                 let state = self.ensure(session);
-                filled.push((session.key.clone(), state));
+                // Still Pending means another thread owns this fold and will publish it. This
+                // pass changed nothing for that session, so it is not news.
+                if !matches!(state, MetricState::Pending) {
+                    filled.push((session.key.clone(), state));
+                }
             }
         }
         filled
@@ -259,5 +311,108 @@ mod tests {
         assert!(svc.is_empty());
         svc.ensure(&s);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// **A fold is not re-entered while it is running.** Claude's largest transcript on this
+    /// machine is 14.6 MB. The background fill and an owner opening that same row both land in
+    /// `ensure`, and the window between the `peek` that answers Pending and the insert that
+    /// stores the result is exactly as long as the fold — so before coalescing, both callers
+    /// read the same tens of megabytes.
+    ///
+    /// The source blocks on its *first* call only, so a service that still double-folds fails
+    /// this on the count rather than hanging the suite.
+    #[test]
+    fn a_transcript_another_thread_is_already_folding_is_not_folded_again() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        // Sender and Receiver are Send but not Sync, and a `MetricSource` is shared by reference.
+        let entered_tx = Mutex::new(entered_tx);
+        let release_rx = Mutex::new(release_rx);
+        let counter = Arc::clone(&calls);
+        let source: Arc<dyn MetricSource> = Arc::new(move |_: &Session| {
+            if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                entered_tx.lock().expect("test sender").send(()).ok();
+                release_rx.lock().expect("test receiver").recv().ok();
+            }
+            Ok((
+                Metrics {
+                    cache_read: 100,
+                    api_calls: 2,
+                    ..Default::default()
+                },
+                MetricBasis::Fold,
+            ))
+        });
+        let service = Arc::new(MetricsService::new(source));
+
+        let folding = {
+            let service = Arc::clone(&service);
+            std::thread::spawn(move || service.ensure(&session("a", 1)))
+        };
+        entered_rx
+            .recv()
+            .expect("the first fold reaches the source");
+
+        // The first fold is in flight right now, and the cache still says Pending.
+        let second = service.ensure(&session("a", 1));
+
+        release_tx
+            .send(())
+            .expect("the first fold is still waiting");
+        let first = folding.join().expect("the folding thread does not panic");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "one fold, not two");
+        assert!(
+            matches!(first, MetricState::Ready { .. }),
+            "the caller that claimed the fold gets the answer"
+        );
+        assert!(
+            matches!(second, MetricState::Pending),
+            "the second caller stays Pending and takes the value from the fill event, rather \
+             than duplicating the read"
+        );
+    }
+
+    /// `fill_pending` is contracted to return "only the ones that changed", and the caller emits
+    /// whatever comes back on `sessions://metrics`. A session skipped because another thread is
+    /// mid-fold has not changed: reporting it would publish a Pending state as news and tell the
+    /// View to blank a row it is about to fill.
+    #[test]
+    fn a_session_skipped_because_its_fold_is_in_flight_is_not_reported_as_filled() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let entered_tx = Mutex::new(entered_tx);
+        let release_rx = Mutex::new(release_rx);
+        let counter = Arc::clone(&calls);
+        let source: Arc<dyn MetricSource> = Arc::new(move |_: &Session| {
+            if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                entered_tx.lock().expect("test sender").send(()).ok();
+                release_rx.lock().expect("test receiver").recv().ok();
+            }
+            Ok((Metrics::default(), MetricBasis::Fold))
+        });
+        let service = Arc::new(MetricsService::new(source));
+
+        let folding = {
+            let service = Arc::clone(&service);
+            std::thread::spawn(move || service.ensure(&session("a", 1)))
+        };
+        entered_rx
+            .recv()
+            .expect("the first fold reaches the source");
+
+        let filled = service.fill_pending(&[session("a", 1)]);
+
+        release_tx
+            .send(())
+            .expect("the first fold is still waiting");
+        folding.join().expect("the folding thread does not panic");
+
+        assert!(
+            filled.is_empty(),
+            "a skipped session changed nothing, so there is nothing to emit: {filled:?}"
+        );
     }
 }
