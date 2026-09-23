@@ -359,7 +359,7 @@ export const EV_STATUS_CHANGED = "status://changed";
 export const EV_CAPACITY_CHANGED = "capacity://changed";
 export const EV_CONSOLE_DATA = "console://data";
 export const EV_CONSOLE_EXIT = "console://exit";
-export const EV_SELECT_SESSION = "feather://select-session";
+export const EV_SELECT_SESSION = "pigeon://select-session";
 
 export interface SessionsChangedEvent {
   scope: Scope;

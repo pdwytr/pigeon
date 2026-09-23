@@ -60,7 +60,7 @@ and the locking discipline came from there; the two products must agree on every
   itself a second later, so change-detection needs a signature with the clock left out.
 - **`mode=ro` cannot open a WAL database with no `-shm`**, which is the normal state of a cleanly
   closed one. "Cannot open" is not "not there".
-- **A bare `cargo build` binary points at the dev server.** `./src-tauri/target/debug/feather`
+- **A bare `cargo build` binary points at the dev server.** `./src-tauri/target/debug/pigeon`
   loads `build.devUrl`, so without Vite running the window is blank and no command reaches Rust —
   which looks precisely like a broken app. Verify behaviour through `npm run tauri dev` or a
   bundle; use `cargo build` only to check that the host compiles.

@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "./App";
-import { createFakeApi, type FakeFeatherApi, fakeApiWith, SHARED_SID } from "./api/fake";
+import { createFakeApi, type FakePigeonApi, fakeApiWith, SHARED_SID } from "./api/fake";
 import type { MetricState } from "./bindings";
 import HoverSurface from "./HoverSurface";
 import { fakeTerminalFactory } from "./test/fakeConsole";
@@ -17,7 +17,7 @@ import { fakeTerminalFactory } from "./test/fakeConsole";
  * accident.
  */
 function renderApp() {
-  const api: FakeFeatherApi = createFakeApi();
+  const api: FakePigeonApi = createFakeApi();
   const terminal = fakeTerminalFactory();
   render(<App api={api} terminalFactory={terminal.factory} />);
   const sidebar = () => screen.getByRole("complementary", { name: /Projects and sessions/ });
@@ -367,9 +367,9 @@ describe("a metric fold that lands after its row was listed", () => {
     // The row rendered `row.metrics` — a copy frozen into the last `sessions_list` answer — while
     // `sessions://metrics` was merged into the store. One session, one screen, two numbers.
     const app = renderApp();
-    await waitFor(() => expect(within(app.sidebar()).getByText("feather")).toBeInTheDocument());
+    await waitFor(() => expect(within(app.sidebar()).getByText("pigeon")).toBeInTheDocument());
     await userEvent.click(
-      within(app.sidebar()).getByText("feather").closest("button") as HTMLElement,
+      within(app.sidebar()).getByText("pigeon").closest("button") as HTMLElement,
     );
 
     const pending = await within(app.pane()).findByText(/counting…/);

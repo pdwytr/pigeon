@@ -17,7 +17,7 @@
 // colour string by throwing.
 
 /** jsdom does not resolve custom properties via `getComputedStyle`, so callers pass a fallback that
- *  keeps the palette deterministic in tests; a real browser overrides it from `styles/feather.css`. */
+ *  keeps the palette deterministic in tests; a real browser overrides it from `styles/pigeon.css`. */
 export function readToken(name: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();

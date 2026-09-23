@@ -8,7 +8,7 @@
 // and a token that is not the current one for that scope returns the state unchanged.
 //
 // Everything here is a pure function of (state, action). No fetching, no timers, no api. Those live
-// in `useFeatherApp`, which is what makes the interesting rules testable without a render.
+// in `usePigeonApp`, which is what makes the interesting rules testable without a render.
 
 import type {
   AccountStatus,
@@ -186,7 +186,7 @@ export function reducer(state: ViewState, action: Action): ViewState {
         settings: action.settings,
         // The host's answer is the authority on whether the hover WINDOW is up. There is no
         // visibility event in the wire contract, so this action is also how a hover that closed
-        // itself reaches the dashboard's button (`useFeatherApp` re-reads settings on focus).
+        // itself reaches the dashboard's button (`usePigeonApp` re-reads settings on focus).
         hoverVisible: action.settings.hover.visible,
         // The remembered tab, adopted ONCE: on the first settings answer, before the owner has
         // touched anything. Re-adopting it on a later read — the focus re-read, say — would move

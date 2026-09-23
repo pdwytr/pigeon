@@ -1,5 +1,5 @@
 {
-  "schema_version": "feather-relational-model/0.7",
+  "schema_version": "pigeon-relational-model/0.7",
   "generated": "2026-09-12",
   "target": "pigeon",
   "purpose": "Three latest-state tables only: accounts, projects, sessions.",

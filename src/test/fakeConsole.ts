@@ -66,7 +66,7 @@ export class FakeConsoleApi implements ConsoleApi {
       id,
       sessionKey,
       provider,
-      cwd: "/Users/khalid/Documents/Projects/feather",
+      cwd: "/Users/khalid/Documents/Projects/pigeon",
       mode: sessionKey ? "resume" : "new",
       state: "running",
       cols: 80,

@@ -1,12 +1,12 @@
 [package]
-name = "feather"
+name = "pigeon"
 version = "0.2.1"
 description = "Pigeon — a one-view, multi-engine coding-agent session console."
 authors = ["IntAnalytic"]
 edition = "2021"
 
 [lib]
-name = "feather_lib"
+name = "pigeon_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

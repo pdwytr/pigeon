@@ -47,7 +47,7 @@ npm install
 npm run tauri dev
 ```
 
-**`./src-tauri/target/debug/feather` does not work on its own.** A debug binary built by plain
+**`./src-tauri/target/debug/pigeon` does not work on its own.** A debug binary built by plain
 `cargo build` still points at `build.devUrl` — `http://localhost:1430` — so with no Vite server
 running the WebView loads nothing, the window comes up blank, and not one command ever reaches
 Rust. The host is fine; there is simply no page. That looks exactly like a broken app and is not

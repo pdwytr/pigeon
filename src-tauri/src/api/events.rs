@@ -19,7 +19,7 @@ pub const CONSOLE_DATA: &str = "console://data";
 /// A console's child ended. Emitted exactly once per console.
 pub const CONSOLE_EXIT: &str = "console://exit";
 /// The hover window asked the main window to select a session.
-pub const SELECT_SESSION: &str = "feather://select-session";
+pub const SELECT_SESSION: &str = "pigeon://select-session";
 
 /// Metric events arrive in batches of at most this many rows.
 pub const METRICS_BATCH: usize = 20;
@@ -79,7 +79,7 @@ mod tests {
         assert_eq!(CAPACITY_CHANGED, "capacity://changed");
         assert_eq!(CONSOLE_DATA, "console://data");
         assert_eq!(CONSOLE_EXIT, "console://exit");
-        assert_eq!(SELECT_SESSION, "feather://select-session");
+        assert_eq!(SELECT_SESSION, "pigeon://select-session");
     }
 
     #[test]

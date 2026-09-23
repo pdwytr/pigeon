@@ -115,17 +115,17 @@ describe("paths", () => {
   });
 
   it("elides the middle of a long path rather than cutting off the folder that matters", () => {
-    const shortened = shortenPath("/Users/khalid/a/b/c/d/e/feather");
-    expect(shortened).toContain("feather");
+    const shortened = shortenPath("/Users/khalid/a/b/c/d/e/pigeon");
+    expect(shortened).toContain("pigeon");
     expect(shortened).toContain("…");
   });
 
   it("handles a Windows path the same way", () => {
-    expect(shortenPath("C:\\Users\\khalid\\Projects\\feather")).toBe("~\\Projects\\feather");
+    expect(shortenPath("C:\\Users\\khalid\\Projects\\pigeon")).toBe("~\\Projects\\pigeon");
   });
 
   it("takes the leaf folder regardless of separator", () => {
-    expect(pathLeaf("/Users/khalid/Projects/feather")).toBe("feather");
+    expect(pathLeaf("/Users/khalid/Projects/pigeon")).toBe("pigeon");
     expect(pathLeaf("C:\\wt\\lane1\\demo-studio")).toBe("demo-studio");
   });
 });

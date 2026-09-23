@@ -225,7 +225,7 @@ mod tests {
     }
 
     fn state_with(status: Arc<dyn LiveStatus>) -> AppState {
-        let dir = std::env::temp_dir().join(format!("feather-test-{}", crate::util::now_ms()));
+        let dir = std::env::temp_dir().join(format!("pigeon-test-{}", crate::util::now_ms()));
         AppState::new(
             vec![],
             Arc::new(|_: &crate::domain::Session| {

@@ -15,7 +15,7 @@
 //     its scrollback. `console_close` happens when the owner asks, and at no other time.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
-import type { FeatherApi } from "../api/types";
+import type { PigeonApi } from "../api/types";
 import type {
   EngineError,
   ProjectSummary,
@@ -50,7 +50,7 @@ function asEngineError(err: unknown, provider: ProviderId | null = null): Engine
   };
 }
 
-export interface FeatherActions {
+export interface PigeonActions {
   setScope(scope: Scope): void;
   selectProject(project: string): void;
   selectSession(key: SessionKey): void;
@@ -71,15 +71,15 @@ export interface FeatherActions {
   dismissNotice(id: string): void;
 }
 
-export interface FeatherApp {
+export interface PigeonApp {
   state: ViewState;
-  actions: FeatherActions;
+  actions: PigeonActions;
   /** Which visible console should replay its scrollback: true when it was adopted from
    *  `console_list`, false when this pane opened it a moment ago and there is nothing to replay. */
   replayVisible: boolean;
 }
 
-export function useFeatherApp(api: FeatherApi, pollMs = 0): FeatherApp {
+export function usePigeonApp(api: PigeonApi, pollMs = 0): PigeonApp {
   const [state, dispatch] = useReducer(reducer, undefined, () => initialState("live"));
   const tokenRef = useRef({ sessions: 0, projects: 0, consoles: 0 });
   /** Which scopes have ever been ASKED for, as opposed to which have answered. A ref and not
@@ -302,7 +302,7 @@ export function useFeatherApp(api: FeatherApi, pollMs = 0): FeatherApp {
 
   // ---------------------------------------------------------------------------------- actions
 
-  const actions = useMemo<FeatherActions>(() => {
+  const actions = useMemo<PigeonActions>(() => {
     const notice = (id: string, text: string, tone: "info" | "error" = "error") =>
       dispatch({ type: "notice/push", notice: { id, tone, text } });
 

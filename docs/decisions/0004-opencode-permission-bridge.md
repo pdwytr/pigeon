@@ -8,7 +8,7 @@ Date: 2026-09-18 · **Status:** accepted
 
 **Two.** Two live `opencode` processes in one folder were shown as **one** session, and the second
 session was not observed at all. Measured on this Mac 2026-09-18: pids 7587 and 66939, both
-`cwd=/Users/khalid/Documents/Projects/feather`, both resolving to the same newest session, which
+`cwd=/Users/khalid/Documents/Projects/pigeon`, both resolving to the same newest session, which
 `collapse` then merged into a single row carrying both pids.
 
 The database cannot see either. Measured against `opencode` 1.18.31:

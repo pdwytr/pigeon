@@ -11,11 +11,11 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use feather_lib::adapters::ProviderAdapter;
-use feather_lib::domain::{MetricState, ProviderId, SessionKey};
-use feather_lib::services::metrics::{MetricSource, MetricsService};
-use feather_lib::services::sessions::SessionsService;
-use feather_lib::wiring;
+use pigeon_lib::adapters::ProviderAdapter;
+use pigeon_lib::domain::{MetricState, ProviderId, SessionKey};
+use pigeon_lib::services::metrics::{MetricSource, MetricsService};
+use pigeon_lib::services::sessions::SessionsService;
+use pigeon_lib::wiring;
 
 /// True when at least one engine has data here. Everything below is skipped otherwise.
 fn any_engine_present() -> bool {
@@ -219,9 +219,9 @@ fn reading_the_engines_never_writes_to_them() {
         "the sandbox should hold a sample to read"
     );
 
-    let claude = feather_lib::adapters::claude::ClaudeAdapter::with_home(root.join(".claude"));
-    let codex = feather_lib::adapters::codex::CodexAdapter::with_home(root.join(".codex"));
-    let opencode = feather_lib::adapters::opencode::OpenCodeAdapter::with_root(
+    let claude = pigeon_lib::adapters::claude::ClaudeAdapter::with_home(root.join(".claude"));
+    let codex = pigeon_lib::adapters::codex::CodexAdapter::with_home(root.join(".codex"));
+    let opencode = pigeon_lib::adapters::opencode::OpenCodeAdapter::with_root(
         root.join(".local/share/opencode"),
     );
 
@@ -237,7 +237,7 @@ fn reading_the_engines_never_writes_to_them() {
             // Fold each sampled session too: the metric readers open the same files again, and a
             // write would most plausibly come from there.
             for path in candidate.source.paths.iter().take(2) {
-                let _ = feather_lib::adapters::claude::fold_usage(path);
+                let _ = pigeon_lib::adapters::claude::fold_usage(path);
             }
             counted += 1;
         }
@@ -385,7 +385,7 @@ fn each_installed_engine_reports_an_identity_or_says_why_not() {
 
 #[test]
 fn opencode_publishes_no_allowance_and_says_so_rather_than_showing_zero() {
-    let adapter = feather_lib::adapters::opencode::OpenCodeAdapter::new();
+    let adapter = pigeon_lib::adapters::opencode::OpenCodeAdapter::new();
     let capacity = adapter.read_capacity();
     assert_eq!(capacity.provider, ProviderId::OpenCode);
     assert!(!capacity.supported);
@@ -414,7 +414,7 @@ fn live_status_keys_match_the_keys_discovery_mints() {
         eprintln!("no engine roots on this machine; skipping");
         return;
     }
-    let status = feather_lib::services::status::StatusService::new();
+    let status = pigeon_lib::services::status::StatusService::new();
     let report = status.snapshot();
     for problem in &report.problems {
         eprintln!("status problem: {} ({:?})", problem.message, problem.kind);
@@ -474,7 +474,7 @@ fn two_status_polls_seconds_apart_report_the_same_signature() {
         eprintln!("no engine roots on this machine; skipping");
         return;
     }
-    let service = feather_lib::services::status::StatusService::new();
+    let service = pigeon_lib::services::status::StatusService::new();
     let first = service.refresh().snapshot;
     let second = service.refresh().snapshot;
 
@@ -547,7 +547,7 @@ fn a_cleanly_closed_opencode_database_still_lists_its_sessions() {
         "nor a shared-memory index"
     );
 
-    let adapter = feather_lib::adapters::opencode::OpenCodeAdapter::with_root(&root);
+    let adapter = pigeon_lib::adapters::opencode::OpenCodeAdapter::with_root(&root);
     let report = adapter.discover_sessions();
 
     assert!(

@@ -1660,7 +1660,7 @@ mod tests {
             Self {
                 id: id.to_string(),
                 parent_id: None,
-                directory: "/Users/khalid/Documents/Projects/feather".to_string(),
+                directory: "/Users/khalid/Documents/Projects/pigeon".to_string(),
                 title: "A session".to_string(),
                 time_created: REAL_TIME_CREATED_MS,
                 time_updated: REAL_TIME_UPDATED_MS,

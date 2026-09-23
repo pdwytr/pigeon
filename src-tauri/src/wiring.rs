@@ -21,7 +21,7 @@ use crate::services::status::{
 /// say which session the process is working on, and only by the folder otherwise.
 ///
 /// **Why the folder is not enough.** A cwd is a folder, and two `opencode` processes can share one
-/// — measured on this Mac 2026-09-18: two live processes in this project, both `cwd=feather`, both
+/// — measured on this Mac 2026-09-18: two live processes in this project, both `cwd=pigeon`, both
 /// resolving to the same newest session, which then collapsed into one row and hid the other
 /// session entirely. The bridge plugin runs inside each process and records the session ids it sees
 /// against its own pid, so the common case is exact. The folder fallback is kept for a machine that

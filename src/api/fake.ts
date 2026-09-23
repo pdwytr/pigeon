@@ -1,4 +1,4 @@
-// An in-memory `FeatherApi`: the whole dashboard, with no Rust behind it.
+// An in-memory `PigeonApi`: the whole dashboard, with no Rust behind it.
 //
 // It exists for two jobs that turn out to be the same job. Tests need a host whose answers they
 // chose; `npm run dev` in a plain browser needs a host at all, since only `host_info` exists on the
@@ -49,7 +49,7 @@ import {
 import { decodeB64, encodeB64 } from "./encoding";
 import type {
   ConsoleOpenArgs,
-  FeatherApi,
+  PigeonApi,
   SessionStartArgs,
   SessionsChangedPayload,
   Unsubscribe,
@@ -66,7 +66,7 @@ const ESC = "\u001b";
 export const SHARED_SID = "0199c4a1-2b3d-7e4f-8a9b-0c1d2e3f4a5b";
 
 const STUDIO_CWD = "/Users/khalid/Documents/Projects/demo-studio";
-const FEATHER_CWD = "/Users/khalid/Documents/Projects/feather";
+const PIGEON_CWD = "/Users/khalid/Documents/Projects/pigeon";
 const VAULT_CWD = "/Users/khalid/chat-organization";
 
 function kpis(
@@ -193,10 +193,10 @@ function seed(now: number): SeedRow[] {
       row: {
         ...base,
         key: { providerId: "opencode", sid: "0199c4b8-77aa-7c31-9f20-5d6e7f809a1b" },
-        cwd: FEATHER_CWD,
-        project: FEATHER_CWD,
-        projectName: "feather",
-        projectLeaf: "feather",
+        cwd: PIGEON_CWD,
+        project: PIGEON_CWD,
+        projectName: "pigeon",
+        projectLeaf: "pigeon",
         title: "API adapter",
         name: null,
         gitBranch: null,
@@ -243,10 +243,10 @@ function seed(now: number): SeedRow[] {
       row: {
         ...base,
         key: { providerId: "claude-code", sid: "0199c3f0-4411-7a02-8c31-2d3e4f506172" },
-        cwd: FEATHER_CWD,
-        project: FEATHER_CWD,
-        projectName: "feather",
-        projectLeaf: "feather",
+        cwd: PIGEON_CWD,
+        project: PIGEON_CWD,
+        projectName: "pigeon",
+        projectLeaf: "pigeon",
         title: "Console polish",
         name: "Console polish",
         firstActiveMs: now - 5 * HOUR,
@@ -268,10 +268,10 @@ function seed(now: number): SeedRow[] {
       row: {
         ...base,
         key: { providerId: "codex", sid: "0199c3d4-9922-7b18-af53-1c2d3e4f5061" },
-        cwd: FEATHER_CWD,
-        project: FEATHER_CWD,
-        projectName: "feather",
-        projectLeaf: "feather",
+        cwd: PIGEON_CWD,
+        project: PIGEON_CWD,
+        projectName: "pigeon",
+        projectLeaf: "pigeon",
         title: "Docs cleanup",
         name: "Docs cleanup",
         firstActiveMs: now - 4 * HOUR,
@@ -497,7 +497,7 @@ export interface FakeApiOptions {
 
 /** The fake, a class so a test can reach the scripting side (`emit`, `emitExit`) that no production
  *  caller has. */
-export class FakeFeatherApi implements FeatherApi {
+export class FakePigeonApi implements PigeonApi {
   readonly calls: { command: string; args?: unknown }[] = [];
   private readonly now = Date.now();
   private readonly seedRows = seed(this.now);
@@ -978,8 +978,8 @@ export class FakeFeatherApi implements FeatherApi {
   }
 }
 
-export function createFakeApi(options?: FakeApiOptions): FakeFeatherApi {
-  return new FakeFeatherApi(options);
+export function createFakeApi(options?: FakeApiOptions): FakePigeonApi {
+  return new FakePigeonApi(options);
 }
 
 /**
@@ -989,6 +989,6 @@ export function createFakeApi(options?: FakeApiOptions): FakeFeatherApi {
  * The overrides sit on an object whose prototype is the fake, so every command that was not
  * replaced still runs the fixture's own code and still records itself in `calls`.
  */
-export function fakeApiWith(over: Partial<FeatherApi>, options?: FakeApiOptions): FakeFeatherApi {
-  return Object.assign(Object.create(createFakeApi(options)), over) as FakeFeatherApi;
+export function fakeApiWith(over: Partial<PigeonApi>, options?: FakeApiOptions): FakePigeonApi {
+  return Object.assign(Object.create(createFakeApi(options)), over) as FakePigeonApi;
 }

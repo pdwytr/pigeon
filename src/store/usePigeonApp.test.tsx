@@ -8,7 +8,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { createFakeApi, fakeApiWith, SHARED_SID } from "../api/fake";
 import type { Settings } from "../bindings";
-import { useFeatherApp } from "./useFeatherApp";
+import { usePigeonApp } from "./usePigeonApp";
 
 /** Let every queued promise and effect settle, inside `act`, without owning a timer. */
 async function settle(ms = 40) {
@@ -35,7 +35,7 @@ describe("a scoped fetch the host refuses", () => {
       },
     });
 
-    const { result } = renderHook(() => useFeatherApp(api, 0));
+    const { result } = renderHook(() => usePigeonApp(api, 0));
     await waitFor(() => expect(result.current.state.sessions.error.live).not.toBeNull());
 
     const first = sessionCalls;
@@ -55,7 +55,7 @@ describe("a scoped fetch the host refuses", () => {
       },
     });
 
-    const { result } = renderHook(() => useFeatherApp(api, 0));
+    const { result } = renderHook(() => usePigeonApp(api, 0));
     await waitFor(() => expect(result.current.state.sessions.error.live).not.toBeNull());
 
     fail = false;
@@ -70,7 +70,7 @@ describe("startup", () => {
     // The follow-up effect closes over the render BEFORE the startup dispatch lands, so it saw
     // `loading: false` and asked for everything a second time.
     const api = createFakeApi();
-    renderHook(() => useFeatherApp(api, 0));
+    renderHook(() => usePigeonApp(api, 0));
     await waitFor(() => expect(api.commandNames()).toContain("sessions_list"));
     await settle();
 
@@ -85,7 +85,7 @@ describe("a console this session opened", () => {
     // stayed true forever: leaving a console and returning to it replayed nothing and the owner
     // was handed an empty grid where 200 lines had been.
     const api = createFakeApi();
-    const { result } = renderHook(() => useFeatherApp(api, 0));
+    const { result } = renderHook(() => usePigeonApp(api, 0));
     await waitFor(() => expect(result.current.state.sessions.live.length).toBeGreaterThan(0));
 
     const rows = result.current.state.sessions.live;
@@ -115,7 +115,7 @@ describe("the hover toggle", () => {
     // wire contract, so the dashboard re-reads `settings_get` on focus; without it the button
     // stayed inverted and "Hide hover" made the hover appear.
     const api = createFakeApi();
-    const { result } = renderHook(() => useFeatherApp(api, 0));
+    const { result } = renderHook(() => usePigeonApp(api, 0));
     await waitFor(() => expect(result.current.state.settings).not.toBeNull());
 
     act(() => result.current.actions.toggleHover());
@@ -147,7 +147,7 @@ describe("the tab the owner left open", () => {
     };
     const api = fakeApiWith({ settingsGet: () => Promise.resolve(settings) });
 
-    const { result } = renderHook(() => useFeatherApp(api, 0));
+    const { result } = renderHook(() => usePigeonApp(api, 0));
     await waitFor(() => expect(result.current.state.scope).toBe("recent"));
     await waitFor(() => expect(result.current.state.sessions.recent.length).toBeGreaterThan(0));
 

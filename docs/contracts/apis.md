@@ -495,7 +495,7 @@ settings_get(): Promise<Settings>
 settings_set(args: Partial<Settings>): Promise<Settings>
 ~~~
 
-hover_select brings the main window forward and emits feather://select-session.
+hover_select brings the main window forward and emits pigeon://select-session.
 
 ## 5. Events
 
@@ -528,7 +528,7 @@ hover_select brings the main window forward and emits feather://select-session.
   exitCode: number | null;
 }
 
-"feather://select-session": SessionKey
+"pigeon://select-session": SessionKey
 ~~~
 
 Metric events arrive in batches of at most 20 rows. React merges them by SessionKey. Status events
@@ -580,7 +580,7 @@ the terminal or when Pigeon shuts down.
 
 ### Hover selection
 
-hover_select(SessionKey) focuses main and emits feather://select-session. React selects and scrolls
+hover_select(SessionKey) focuses main and emits pigeon://select-session. React selects and scrolls
 to the exact row.
 
 ## 7. Rust module boundary

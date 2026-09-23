@@ -599,7 +599,7 @@ that owned process.
 | 2 | Which engines? | Claude Code, Codex, **and OpenCode** now; xAI/Meta later |
 | 3 | Keep Python as a thin sidecar? | **Drop Python** |
 | 4 | Where does the terminal live? | In-pane, right side |
-| 5 | Repo root? | `~/Documents/Projects/feather` |
+| 5 | Repo root? | `~/Documents/Projects/pigeon` |
 | 6 | (owner addition) per-session numbers | six counters + three KPIs, "cost and usefulness" |
 | 7 | (owner addition) project level | the same rolled up per project |
 | 8 | (owner addition) OpenCode | first-class from the start |

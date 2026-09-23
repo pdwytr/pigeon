@@ -10,12 +10,12 @@
 // project rollup, metrics, or selection state: it is the complete product surface.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FeatherApi } from "./api/types";
+import type { PigeonApi } from "./api/types";
 import type { AccountStatus, SessionRow, StatusSnapshot } from "./bindings";
 import { type HookPrompt, LiveDock } from "./components/LiveDock";
 import { formatClock } from "./format";
 import { hoverSessions } from "./store/selectors";
-import "./styles/feather.css";
+import "./styles/pigeon.css";
 
 /** "Not now" has to survive a restart, or the same offer is made on every launch. One key per
  *  engine, so dismissing the Codex offer does not silently dismiss OpenCode's. */
@@ -26,7 +26,7 @@ const OPENCODE_DISMISSED_KEY = "pigeon.opencode-hooks-dismissed";
 const HOOKS_MESSAGE_MS = 6000;
 
 export interface HoverSurfaceProps {
-  api: FeatherApi;
+  api: PigeonApi;
   /** Poll interval. 0 disables the timer, which is what the tests want. */
   pollMs?: number;
 }

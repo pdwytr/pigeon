@@ -42,7 +42,7 @@ Make session activity state coherent across the terminal, session rows, project 
 
 **Dependencies:** None.
 
-**Files likely touched:** `src/store/viewStore.test.ts`, `src/store/selectors.test.ts` (new if useful), `src/components/ProjectCard.test.tsx` (new if useful), `src/components/TerminalPanel.test.tsx`, `src/store/useFeatherApp.test.tsx`.
+**Files likely touched:** `src/store/viewStore.test.ts`, `src/store/selectors.test.ts` (new if useful), `src/components/ProjectCard.test.tsx` (new if useful), `src/components/TerminalPanel.test.tsx`, `src/store/usePigeonApp.test.tsx`.
 
 **Estimated scope:** Medium.
 
@@ -107,7 +107,7 @@ Make session activity state coherent across the terminal, session rows, project 
 
 **Dependencies:** Task 3.
 
-**Files likely touched:** `src/store/viewStore.ts`, `src/store/useFeatherApp.ts`, `src/store/selectors.ts`, `src/store/useFeatherApp.test.tsx`, `src/store/viewStore.test.ts`.
+**Files likely touched:** `src/store/viewStore.ts`, `src/store/usePigeonApp.ts`, `src/store/selectors.ts`, `src/store/usePigeonApp.test.tsx`, `src/store/viewStore.test.ts`.
 
 **Estimated scope:** Medium.
 
@@ -134,7 +134,7 @@ Make session activity state coherent across the terminal, session rows, project 
 
 **Dependencies:** Task 4.
 
-**Files likely touched:** `src/components/TerminalPanel.tsx`, `src/console/ConsoleView.tsx`, `src/store/useFeatherApp.ts`, terminal tests, API/event types if a callback is needed.
+**Files likely touched:** `src/components/TerminalPanel.tsx`, `src/console/ConsoleView.tsx`, `src/store/usePigeonApp.ts`, terminal tests, API/event types if a callback is needed.
 
 **Estimated scope:** Large; split further if the callback/event seam exceeds five files.
 

@@ -377,7 +377,7 @@ impl AppServer {
         self.call(
             "initialize",
             serde_json::json!({
-                "clientInfo": { "name": "feather", "version": env!("CARGO_PKG_VERSION") }
+                "clientInfo": { "name": "pigeon", "version": env!("CARGO_PKG_VERSION") }
             }),
         )?;
         Ok(())
@@ -409,7 +409,7 @@ impl AppServer {
                 continue;
             }
             if let Some(error) = value.get("error") {
-                if std::env::var_os("FEATHER_DEBUG_APP_SERVER").is_some() {
+                if std::env::var_os("PIGEON_DEBUG_APP_SERVER").is_some() {
                     eprintln!("app-server error for {method}: {error}");
                 }
                 return Err(EngineError::of(engine, ErrorKind::UnknownShape));

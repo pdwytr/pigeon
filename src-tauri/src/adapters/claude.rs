@@ -10,7 +10,7 @@
 //! 2. **The head of the file answers discovery.** `cwd` first appears by line 8 and the first real
 //!    user text by line 11 in 51/51 files, so nothing here reads a whole transcript to draw a row
 //!    — the largest on this machine is 14.6 MB.
-//! 3. **The encoded directory name is never decoded.** `-Users-khalid-Documents-Projects-feather`
+//! 3. **The encoded directory name is never decoded.** `-Users-khalid-Documents-Projects-pigeon`
 //!    is lossy (a hyphen in a real folder name is indistinguishable from a separator); Studio
 //!    carries that bug as backlog #26. The `cwd` the engine itself recorded is the only truth.
 //!

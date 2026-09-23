@@ -1,4 +1,4 @@
-// The Tauri implementation of `FeatherApi` — the ONLY module in the app that calls `invoke` or
+// The Tauri implementation of `PigeonApi` — the ONLY module in the app that calls `invoke` or
 // registers a host event listener.
 //
 // Everything here is a thin name/argument mapping. There is no caching, no merging and no
@@ -41,7 +41,7 @@ import {
 import { subscribeHostEvent } from "../platform/hostEvents";
 import type {
   ConsoleOpenArgs,
-  FeatherApi,
+  PigeonApi,
   SessionStartArgs,
   SessionsChangedPayload,
   Unsubscribe,
@@ -89,7 +89,7 @@ function on<T>(event: string, cb: (payload: T) => void): Unsubscribe {
   return () => sub.stop();
 }
 
-export function createTauriApi(): FeatherApi {
+export function createTauriApi(): PigeonApi {
   return {
     hostInfo: () => call<HostInfo>("host_info"),
     settingsGet: () => call<Settings>("settings_get"),

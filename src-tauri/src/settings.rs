@@ -268,7 +268,7 @@ impl Settings {
 pub fn default_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("com.intanalytic.feather")
+        .join("com.intanalytic.pigeon")
         .join("config.toml")
 }
 

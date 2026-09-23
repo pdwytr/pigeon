@@ -194,7 +194,7 @@ The API client is the only React module allowed to call `invoke` or subscribe to
 Components dispatch intent to application actions; they do not call Tauri directly.
 
 ```ts
-interface FeatherApi {
+interface PigeonApi {
   hostInfo(): Promise<HostInfo>;
   settingsGet(): Promise<Settings>;
   settingsSet(patch: Partial<Settings>): Promise<Settings>;
@@ -268,7 +268,7 @@ The store subscribes to:
 - `status://changed`: replace the status snapshot atomically and rejoin statuses by SessionKey.
 - `console://data`: route bytes by console id to the terminal renderer.
 - `console://exit`: update the console state and show an exit notice if it is visible.
-- `feather://select-session`: select and scroll to the exact session row.
+- `pigeon://select-session`: select and scroll to the exact session row.
 
 The store must ignore late responses for an older scope request. Each request gets a monotonically
 increasing request token; only the newest token for that scope may replace the scope data.
@@ -282,7 +282,7 @@ omitted.
 
 ```ts
 interface AppShellProps {
-  api: FeatherApi;
+  api: PigeonApi;
   terminalFactory: TerminalFactory;
 }
 ```
@@ -562,7 +562,7 @@ the library, but it requires byte writes, resize notifications, focus, disposal,
 ```ts
 interface TerminalPanelProps {
   console: ConsoleViewModel;
-  api: Pick<FeatherApi,
+  api: Pick<PigeonApi,
     "consoleReady" | "consoleInput" | "consoleResize" |
     "consoleClose" | "consoleScrollback">;
   terminalFactory: TerminalFactory;
@@ -705,7 +705,7 @@ The hover must not show closed Recent sessions. If there are more rows than fit,
 the component may show a “more below” hint but must not fabricate counts.
 
 `onSelect` dispatches `hover_select(key)`, then the main window handles
-`feather://select-session` by selecting and scrolling to the exact row.
+`pigeon://select-session` by selecting and scrolling to the exact row.
 
 ## 8. Loading, empty, and error states
 
@@ -809,7 +809,7 @@ Formatting is presentation-only:
 ```text
 src/
   api/
-    featherApi.ts          // generated binding wrapper; invoke/subscription only
+    pigeonApi.ts          // generated binding wrapper; invoke/subscription only
     types.ts               // generated API types, not hand-edited
   store/
     viewStore.ts            // normalized ViewState and reducers/actions

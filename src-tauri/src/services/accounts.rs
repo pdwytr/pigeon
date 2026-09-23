@@ -70,7 +70,7 @@ impl AccountsService {
     {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let spawned = std::thread::Builder::new()
-            .name(format!("feather-account-{}", provider.as_str()))
+            .name(format!("pigeon-account-{}", provider.as_str()))
             .spawn(move || {
                 let answer = adapters
                     .iter()

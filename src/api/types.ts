@@ -1,6 +1,6 @@
 // The shape of the host as React sees it.
 //
-// `FeatherApi` is `docs/contracts/components.md` §4 verbatim, plus the event subscriptions — the
+// `PigeonApi` is `docs/contracts/components.md` §4 verbatim, plus the event subscriptions — the
 // contract says the api client is "the only React module allowed to call `invoke` or subscribe to
 // Tauri events", so the subscriptions have to be part of the same interface or a component would
 // have to reach past it to hear anything.
@@ -54,7 +54,7 @@ export interface SessionsChangedPayload {
   generatedAtMs: number;
 }
 
-export interface FeatherApi {
+export interface PigeonApi {
   hostInfo(): Promise<HostInfo>;
   settingsGet(): Promise<Settings>;
   settingsSet(patch: Partial<Settings>): Promise<Settings>;
@@ -100,7 +100,7 @@ export interface FeatherApi {
 /** The slice of the api a terminal needs. `TerminalPanel`/`ConsoleView` take only this, so nothing
  *  in the console path can reach a session or project command by accident. */
 export type ConsoleApi = Pick<
-  FeatherApi,
+  PigeonApi,
   | "consoleReady"
   | "consoleInput"
   | "consoleResize"

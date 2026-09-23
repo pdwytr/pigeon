@@ -8,12 +8,12 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { createTauriApi, isTauri } from "./api/client";
 import { createFakeApi } from "./api/fake";
-import type { FeatherApi } from "./api/types";
+import type { PigeonApi } from "./api/types";
 import HoverSurface from "./HoverSurface";
 
 // `animate: true` only in the browser: the fake resolves its pending metric a beat after startup
 // and echoes keystrokes, so the dev surface behaves like something live rather than a still.
-const api: FeatherApi = isTauri() ? createTauriApi() : createFakeApi({ animate: true });
+const api: PigeonApi = isTauri() ? createTauriApi() : createFakeApi({ animate: true });
 
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html has no #root to mount into");

@@ -1324,7 +1324,7 @@ mod tests {
 
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "feather-console-{tag}-{}-{}",
+            "pigeon-console-{tag}-{}-{}",
             std::process::id(),
             next_seq()
         ));
@@ -2123,7 +2123,7 @@ mod tests {
     /// [`resolve_on_path`] and the PATH override are wired to the real spawn.
     #[test]
     fn a_real_pty_streams_output_and_reports_the_exit_code_exactly_once() {
-        const MARKER: &str = "feather-pty-ok";
+        const MARKER: &str = "pigeon-pty-ok";
         let dir = scratch_dir("smoke");
         // `exit 3`: a code no runtime produces by accident, so "the code came from the child" is
         // not an inference. stderr is redirected into stdout because a pty is one stream either
@@ -2282,10 +2282,10 @@ mod tests {
         service.ready(&id).expect("known");
 
         service
-            .input(&id, &encode_b64(b"hello-feather\n"))
+            .input(&id, &encode_b64(b"hello-pigeon\n"))
             .expect("the write must reach the pty");
         wait_until(
-            || events.text().contains("got:hello-feather"),
+            || events.text().contains("got:hello-pigeon"),
             "the child's answer",
         );
 

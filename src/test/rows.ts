@@ -49,7 +49,7 @@ export interface RowSpec {
 
 export function makeRow(spec: RowSpec = {}): SessionRow {
   const provider = spec.provider ?? "claude-code";
-  const project = spec.project ?? "/Users/khalid/Documents/Projects/feather";
+  const project = spec.project ?? "/Users/khalid/Documents/Projects/pigeon";
   return {
     key: { providerId: provider, sid: spec.sid ?? "0199c4a1-2b3d-7e4f-8a9b-0c1d2e3f4a5b" },
     cwd: project,

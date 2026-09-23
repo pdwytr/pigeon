@@ -12,7 +12,7 @@
 //     telling them where it went.
 
 import { useEffect, useMemo } from "react";
-import type { FeatherApi } from "../api/types";
+import type { PigeonApi } from "../api/types";
 import type { TerminalFactory } from "../console/terminalEngine";
 import {
   findProject,
@@ -25,13 +25,13 @@ import {
   visibleProjects,
   visibleSessions,
 } from "../store/selectors";
-import { selectionIsStale, useFeatherApp } from "../store/useFeatherApp";
+import { selectionIsStale, usePigeonApp } from "../store/usePigeonApp";
 import { DetailPane } from "./DetailPane";
 import { Topbar } from "./Topbar";
 import { WorkspaceSidebar } from "./WorkspaceSidebar";
 
 export interface AppShellProps {
-  api: FeatherApi;
+  api: PigeonApi;
   /** Injected in tests; production builds a real xterm inside `ConsoleView`. */
   terminalFactory?: TerminalFactory;
   /** Poll the status snapshot on this interval. Zero (the default, and what tests use) relies on
@@ -47,7 +47,7 @@ function parentOf(cwd: string | undefined): string {
 }
 
 export function AppShell({ api, terminalFactory, pollMs = 0 }: AppShellProps) {
-  const { state, actions, replayVisible } = useFeatherApp(api, pollMs);
+  const { state, actions, replayVisible } = usePigeonApp(api, pollMs);
 
   const sessions = visibleSessions(state);
   const projects = visibleProjects(state);

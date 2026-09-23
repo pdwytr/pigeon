@@ -798,7 +798,7 @@ sid with a dead status file is **running**, not status-less; T-22.3 counts equal
    Corner or free position is saved (debounced 500 ms) and restored on launch, clamped onto a
    visible monitor.
 4. Clicking a row: `hover_select(SessionKey)` → the host shows and focuses `main` and emits
-   `feather://select-session SessionKey` to it; clicking the header only shows `main`.
+   `pigeon://select-session SessionKey` to it; clicking the header only shows `main`.
 5. Toggle from the main window's title area (`hover_toggle`), state in settings. The hover never
    takes keyboard focus and is excluded from the app switcher.
 6. Capabilities: `capabilities/default.json` lists windows `["main", "hover"]` with
@@ -921,7 +921,7 @@ project or session, or start one".
 **Traces.** UR-10, UR-14. **Origin.** owner.
 
 ### FR-33 Logging and diagnostics
-**Statement.** The host MUST write a JSON-lines log to `<app-data>/logs/feather.log` with rotation
+**Statement.** The host MUST write a JSON-lines log to `<app-data>/logs/pigeon.log` with rotation
 at 5 MB × 3, and MUST expose the last 200 records in a small diagnostics panel behind the title
 area.
 **Behaviour.** Records `{ts, level, event, fields…}`; events for spawn (program path, engine,
@@ -1020,7 +1020,7 @@ settings_set(args: Partial<Settings>): Settings
 "capacity://changed"  { provider: ProviderId; account: AccountStatus; generatedAtMs: number }
 "console://data"      { id; dataB64 }
 "console://exit"      { id; exitCode: number | null }
-"feather://select-session" SessionKey               // to the main window only
+"pigeon://select-session" SessionKey               // to the main window only
 ```
 
 ### 4.1 Types
@@ -1109,7 +1109,7 @@ interface Settings { hover: { visible: boolean; corner: "tl"|"tr"|"bl"|"br"|null
    and rail/hover on `status://changed`.
 3. **Resume.** Row → `console_open` → in-place terminal attaches (FR-10 order) → bytes flow → on exit
    `console://exit` → host refreshes sessions + status.
-4. **Hover click.** `hover_select` → main shown/focused → `feather://select-session` → the list
+4. **Hover click.** `hover_select` → main shown/focused → `pigeon://select-session` → the list
    scrolls to and selects the row; if a console exists for it, the in-place terminal is focused.
 
 ---
