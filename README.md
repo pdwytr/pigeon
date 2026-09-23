@@ -225,4 +225,4 @@ Inherited from Demo Studio, where each was learned the expensive way.
 ## Not in this pass
 
 macOS signing and notarization, Windows and Linux runtime verification, multi-profile logins,
-OpenCode capacity (it publishes none), filesystem watching, and any persistent store.
+filesystem watching, and any persistent store.

@@ -383,20 +383,32 @@ fn each_installed_engine_reports_an_identity_or_says_why_not() {
     }
 }
 
+/// OpenCode's allowance is the Go plan's, read with the `opencode-go` key. The test once asserted
+/// OpenCode published none, which stopped being true when the Go read shipped, so it failed on
+/// every machine: signed in to Go it found a reading, and on a clean CI runner it found the
+/// missing key stated as a problem. Both are right. What must never happen is the third shape,
+/// an absence with no reason, which the Account strip would render as an idle zero.
 #[test]
-fn opencode_publishes_no_allowance_and_says_so_rather_than_showing_zero() {
+fn opencode_states_its_go_allowance_or_says_why_it_could_not_never_a_silent_absence() {
     let adapter = pigeon_lib::adapters::opencode::OpenCodeAdapter::new();
     let capacity = adapter.read_capacity();
     assert_eq!(capacity.provider, ProviderId::OpenCode);
-    assert!(!capacity.supported);
-    assert!(
-        capacity.windows.is_empty(),
-        "an unsupported allowance must draw no bar"
-    );
-    assert!(
-        capacity.problem.is_none(),
-        "unsupported is an absence, not a failure"
-    );
+    if capacity.supported {
+        assert!(
+            capacity.problem.is_none(),
+            "a reading carries no problem: {:?}",
+            capacity.problem
+        );
+    } else {
+        assert!(
+            capacity.problem.is_some(),
+            "an allowance we could not read must say why rather than show zero"
+        );
+        assert!(
+            capacity.windows.is_empty(),
+            "an unread allowance must draw no bar"
+        );
+    }
 }
 
 /// **The join that the Live tab depends on.**

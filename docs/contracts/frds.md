@@ -396,8 +396,9 @@ holds *saved rules*, not pending asks (0 rows during a live ask, measured 2026-0
 An active child session in OpenCode's `parent_id` relation makes an otherwise waiting parent
 **delegating**; child counters remain separate from the parent's counters.
 
-**2.3.6 Capacity.** None: OpenCode is provider-agnostic and states no allowance. The card says
-"capacity not exposed by this engine". `opencode` supports `--session <id>`; `--fork` exists and is
+**2.3.6 Capacity.** The OpenCode Go plan's allowance, read with the `opencode-go` key. Without
+that key, or when the read fails, the card states why (`supported: false` with a problem) and
+draws no bar; it never shows an unexplained absence. `opencode` supports `--session <id>`; `--fork` exists and is
 not used.
 
 **2.3.7 Resume.** `opencode --session <id>` in the row's `directory`.
@@ -651,9 +652,12 @@ s → `stale: true`; T-13.6 reached-limit sample → absence with the word.
 **Traces.** UR-2, UR-13. **Origin.** owner. **Provenance.** `capture/usage_capacity.py:1873-1999`.
 
 ### FR-14 OpenCode capacity
-**Statement.** OpenCode reports `supported: false`; the card shows "capacity not exposed by this
-engine" and never a bar.
-**Tests.** T-14.1 the OpenCode card renders the sentence and no bar element.
+**Statement.** OpenCode reports the Go plan's allowance when the `opencode-go` key reads, and
+otherwise `supported: false` with the problem that stopped it. It never reports `supported: false`
+with no problem, and never draws a bar it did not read. (Amended 2026-09-23: this said OpenCode
+publishes no allowance, which stopped being true when the Go read shipped in 0.2.1.)
+**Tests.** T-14.1 the OpenCode card renders the sentence and no bar element; T-14.2
+`real_machine::opencode_states_its_go_allowance_or_says_why_it_could_not_never_a_silent_absence`.
 **Traces.** UR-2, UR-13. **Origin.** agent.
 
 ### FR-15 Account strip
