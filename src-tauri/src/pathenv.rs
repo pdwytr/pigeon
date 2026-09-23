@@ -24,6 +24,8 @@ use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+// Unix-only, like the login-shell probe that times out with it; Windows has no probe.
+#[cfg(unix)]
 use std::time::Duration;
 
 /// How long the login-shell probe may take before Pigeon gives up and uses the fallback.
