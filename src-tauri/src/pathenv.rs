@@ -33,6 +33,7 @@ use std::time::Duration;
 /// network mount or a prompt. This probe sits on the path to opening a console, so a shell that
 /// never returns would otherwise be indistinguishable from a hung app. 2 seconds is generous
 /// against a warm zsh and short enough to still feel like a click.
+#[cfg(unix)]
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The terminal type Pigeon claims for its children.
