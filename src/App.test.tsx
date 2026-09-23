@@ -239,8 +239,12 @@ describe("the live hover", () => {
     render(<HoverSurface api={api} pollMs={0} />);
 
     const hover = await screen.findByTestId("live-hover");
-    const openAgents = within(hover).getByText(/open agent/i);
-    expect(openAgents).toHaveTextContent(/^\d+ open agent$/i);
+    // The header reads "3 open", not "3 open agent": the plate already says whose.
+    const openLabel = within(hover).getByText(
+      (_, el) => el?.classList.contains("dock-open-label") ?? false,
+    );
+    expect(openLabel).toHaveTextContent(/^\d+ open$/i);
+    expect(within(hover).queryByText(/open agent/i)).toBeNull();
 
     expect(within(hover).queryByRole("button", { name: /Pigeon UI/ })).toBeNull();
   });

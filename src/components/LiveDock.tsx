@@ -87,7 +87,7 @@ export function LiveDock({
               {status ? (
                 <span className="dock-status">
                   <span className="dock-open-label">
-                    <strong>{sessions.length}</strong> open agent
+                    <strong>{sessions.length}</strong> open
                   </span>
                   <span className="dock-running-count">
                     {
