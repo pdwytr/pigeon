@@ -2582,6 +2582,8 @@ mod tests {
         assert_eq!(closed.files(), vec![DB_FILE.to_string()]);
     }
 
+    // Unix-only: it makes the file unreadable with `chmod 000`, which Windows has no equivalent of.
+    #[cfg(unix)]
     #[test]
     fn a_database_that_exists_but_cannot_be_opened_is_io_and_never_a_missing_root() {
         use std::os::unix::fs::PermissionsExt;

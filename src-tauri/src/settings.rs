@@ -272,6 +272,31 @@ pub fn default_path() -> PathBuf {
         .join("config.toml")
 }
 
+/// Where the pre-rename build kept the same file. Read once, by [`adopt_legacy`], and never written.
+pub fn legacy_path() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("com.intanalytic.feather")
+        .join("config.toml")
+}
+
+/// Carry the owner's settings across the feather -> pigeon rename, once.
+///
+/// The rename moved the settings directory with the bundle identifier, so without this an upgrade
+/// from 0.2.1 silently comes up on defaults. A copy, not a move: the old build keeps working if
+/// the owner goes back to it. It never overwrites, so once the new file exists this does nothing.
+/// Returns whether it copied.
+pub fn adopt_legacy(current: &Path, legacy: &Path) -> bool {
+    if current.exists() {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(legacy) else {
+        return false;
+    };
+    // Through `save`, so the copy is atomic and sanitised like any other write.
+    Settings::from_toml(&text).sanitized().save(current).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,6 +410,63 @@ mod tests {
         };
         s.save(&path).expect("saves");
         assert_eq!(Settings::load(&path), s);
+    }
+
+    #[test]
+    fn the_first_launch_after_the_rename_carries_the_old_settings_over() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let legacy = dir
+            .path()
+            .join("com.intanalytic.feather")
+            .join("config.toml");
+        let current = dir
+            .path()
+            .join("com.intanalytic.pigeon")
+            .join("config.toml");
+        let owners = Settings {
+            recent_window_days: 21,
+            ..Default::default()
+        };
+        owners.save(&legacy).expect("saves");
+
+        assert!(adopt_legacy(&current, &legacy), "a copy was made");
+        assert_eq!(Settings::load(&current), owners);
+        assert!(
+            legacy.exists(),
+            "copied, not moved: the old build still works"
+        );
+    }
+
+    #[test]
+    fn settings_already_saved_by_this_build_are_never_overwritten_by_the_old_ones() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let legacy = dir.path().join("old").join("config.toml");
+        let current = dir.path().join("new").join("config.toml");
+        Settings {
+            recent_window_days: 21,
+            ..Default::default()
+        }
+        .save(&legacy)
+        .expect("saves");
+        let mine = Settings {
+            recent_window_days: 3,
+            ..Default::default()
+        };
+        mine.save(&current).expect("saves");
+
+        assert!(!adopt_legacy(&current, &legacy));
+        assert_eq!(Settings::load(&current), mine);
+    }
+
+    #[test]
+    fn a_fresh_install_with_no_old_settings_creates_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let current = dir.path().join("new").join("config.toml");
+        assert!(!adopt_legacy(
+            &current,
+            &dir.path().join("old").join("config.toml")
+        ));
+        assert!(!current.exists());
     }
 
     #[test]

@@ -140,13 +140,19 @@ pub struct InstallReport {
 }
 
 /// Is Pigeon's plugin already there? A read of the owner's config, never a write.
+///
+/// Installed means Pigeon's plugin appending to *this* build's event file. A plugin left by the
+/// pre-rename build still writes to `com.intanalytic.feather/`, which Pigeon no longer reads, so
+/// it must be offered again rather than trusted. The path is matched as the JSON literal
+/// [`plugin_source`] embeds.
 pub fn is_installed() -> bool {
-    is_installed_at(&config_dir())
+    is_installed_at(&config_dir(), &events_path())
 }
 
-fn is_installed_at(config: &Path) -> bool {
+fn is_installed_at(config: &Path, events: &Path) -> bool {
+    let literal = serde_json::to_string(&events.to_string_lossy().into_owned()).unwrap_or_default();
     std::fs::read_to_string(config.join("plugins").join(PLUGIN_FILE))
-        .map(|text| text.contains(PLUGIN_MARKER))
+        .map(|text| text.contains(PLUGIN_MARKER) && text.contains(&literal))
         .unwrap_or(false)
 }
 
@@ -171,7 +177,7 @@ pub fn install_at(config: &Path, events: &Path) -> Result<InstallReport, EngineE
 
     // Read back rather than assume: the only state that fires is the file being there and being
     // Pigeon's.
-    let installed = is_installed_at(config);
+    let installed = is_installed_at(config, events);
     Ok(InstallReport {
         installed,
         message: if installed {
@@ -238,13 +244,16 @@ mod tests {
         let config = dir.path().join("opencode");
         let events = dir.path().join("events.jsonl");
 
-        assert!(!is_installed_at(&config), "nothing is installed to start");
+        assert!(
+            !is_installed_at(&config, &events),
+            "nothing is installed to start"
+        );
         let report = install_at(&config, &events).expect("install runs");
         assert!(report.installed, "{}", report.message);
-        assert!(is_installed_at(&config));
+        assert!(is_installed_at(&config, &events));
 
         uninstall_at(&config).expect("uninstall runs");
-        assert!(!is_installed_at(&config));
+        assert!(!is_installed_at(&config, &events));
         // Removing what is not there is the state asked for, not an error.
         uninstall_at(&config).expect("a second uninstall is fine");
     }
@@ -256,9 +265,34 @@ mod tests {
         let plugins = config.join("plugins");
         std::fs::create_dir_all(&plugins).unwrap();
         std::fs::write(plugins.join(PLUGIN_FILE), "// someone else's plugin").unwrap();
+        let events = dir.path().join("events.jsonl");
         assert!(
-            !is_installed_at(&config),
+            !is_installed_at(&config, &events),
             "the marker is what identifies Pigeon's plugin, not the filename"
         );
+    }
+
+    #[test]
+    fn a_plugin_left_appending_to_another_apps_event_file_is_not_installed_so_it_is_offered_again()
+    {
+        // The feather -> pigeon rename moved the event file. A plugin written by the old build
+        // still appends to the old path; reading it as installed would mean Pigeon never
+        // re-offers it and OpenCode permission asks silently stop showing as waiting on you.
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("opencode");
+        let stale = dir
+            .path()
+            .join("com.intanalytic.feather")
+            .join("events.jsonl");
+        let current = dir
+            .path()
+            .join("com.intanalytic.pigeon")
+            .join("events.jsonl");
+        install_at(&config, &stale).expect("install runs");
+        assert!(!is_installed_at(&config, &current));
+
+        // And re-accepting the offer points it at the current file.
+        let report = install_at(&config, &current).expect("reinstall runs");
+        assert!(report.installed, "{}", report.message);
     }
 }

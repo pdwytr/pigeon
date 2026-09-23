@@ -184,12 +184,19 @@ fn shell_quote(raw: &str) -> String {
 
 /// Is our hook already in the user's Codex config? A read of the owner's file, never a write.
 pub fn is_installed() -> bool {
-    is_installed_at(&codex_home())
+    is_installed_at(&codex_home(), &events_path())
 }
 
-fn is_installed_at(home: &Path) -> bool {
+/// Installed means a hook appends to *this* build's event file, not merely to one of that name: a
+/// hook left by the pre-rename build still writes to `com.intanalytic.feather/`, which Pigeon no
+/// longer reads, and must be offered again rather than trusted. The path is matched both raw and
+/// TOML-escaped, because Codex writes the command as a basic string and a Windows path has
+/// backslashes.
+fn is_installed_at(home: &Path, events: &Path) -> bool {
+    let raw = events.to_string_lossy();
+    let escaped = raw.replace('\\', "\\\\");
     std::fs::read_to_string(home.join("config.toml"))
-        .map(|text| text.contains("codex-hook-events.jsonl"))
+        .map(|text| text.contains(raw.as_ref()) || text.contains(&escaped))
         .unwrap_or(false)
 }
 
@@ -661,6 +668,48 @@ mod tests {
         );
 
         uninstall_at(&home, &events).expect("uninstall runs");
+    }
+
+    fn codex_home_with_hook_for(dir: &Path, events: &Path) -> PathBuf {
+        let home = dir.join("codex-home");
+        std::fs::create_dir_all(&home).unwrap();
+        // The shape Codex writes: the command as a TOML basic string, the path single-quoted.
+        let command = hook_command_for(events).replace('\\', "\\\\");
+        std::fs::write(
+            home.join("config.toml"),
+            format!("[[hooks.PreToolUse]]\nmatcher = \".*\"\n\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"{command}\"\n"),
+        )
+        .unwrap();
+        home
+    }
+
+    #[test]
+    fn a_hook_that_appends_to_this_apps_event_file_counts_as_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let events = dir
+            .path()
+            .join("com.intanalytic.pigeon")
+            .join("codex-hook-events.jsonl");
+        let home = codex_home_with_hook_for(dir.path(), &events);
+        assert!(is_installed_at(&home, &events));
+    }
+
+    #[test]
+    fn a_hook_left_pointing_at_another_apps_event_file_is_not_installed_so_it_is_offered_again() {
+        // The feather -> pigeon rename moved the event file. A hook installed by the old build
+        // still appends to the old path, so reading it as installed would mean Pigeon never
+        // re-offers it and Codex approvals silently stop showing as waiting on you.
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir
+            .path()
+            .join("com.intanalytic.feather")
+            .join("codex-hook-events.jsonl");
+        let current = dir
+            .path()
+            .join("com.intanalytic.pigeon")
+            .join("codex-hook-events.jsonl");
+        let home = codex_home_with_hook_for(dir.path(), &stale);
+        assert!(!is_installed_at(&home, &current));
     }
 
     #[test]

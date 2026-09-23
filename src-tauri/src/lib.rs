@@ -42,6 +42,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // Before AppState reads the file, so the first launch after the rename sees the
+            // owner's settings rather than defaults.
+            settings::adopt_legacy(&settings::default_path(), &settings::legacy_path());
             let status = Arc::new(wiring::status_service());
             let state = Arc::new(AppState::new(
                 wiring::adapters(),
