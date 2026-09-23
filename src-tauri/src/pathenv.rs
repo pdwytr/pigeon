@@ -55,6 +55,29 @@ const COLORTERM: &str = "truecolor";
 /// them into mojibake.
 const FALLBACK_LANG: &str = "en_US.UTF-8";
 
+/// Variables a running Claude Code session sets on every process it spawns, and which therefore
+/// reach Pigeon whenever Pigeon was itself started from such a process (`npm run tauri dev` in an
+/// agent's shell, or a VS Code window opened from one — the measured case, 2026-09-23).
+///
+/// **Stripped from every console child**, because the CLI reads them as "I am a subprocess of
+/// another session": `CLAUDE_CODE_CHILD_SESSION` alone turns transcript saving off, so a session
+/// Pigeon resumed would stop writing the very files Pigeon reads. An explicit list rather than a
+/// `CLAUDE_CODE_*` prefix, because that prefix is also the owner's own configuration
+/// (`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`) and must survive.
+pub const INHERITED_SESSION_MARKERS: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+];
+
 /// Install directories unioned onto whatever the probe returns, in the order a `which` would find
 /// them. Absolute paths only; `~` is expanded against the real home, never left for a shell.
 fn well_known_dirs() -> Vec<PathBuf> {

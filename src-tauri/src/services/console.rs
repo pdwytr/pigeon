@@ -581,6 +581,17 @@ fn resolve_on_path(
     None
 }
 
+/// Put the console child's environment on top of the inherited one, minus any parent Claude
+/// session's markers (see [`pathenv::INHERITED_SESSION_MARKERS`] for why they cannot pass).
+fn apply_child_env(builder: &mut CommandBuilder, overrides: Vec<(String, String)>) {
+    for name in pathenv::INHERITED_SESSION_MARKERS {
+        builder.env_remove(name);
+    }
+    for (name, value) in overrides {
+        builder.env(name, value);
+    }
+}
+
 /// The argv to hand the spawn, given a resolved executable and the engine's own arguments.
 ///
 /// **On Windows this is not a formality** and the note is kept because the port is meant to run
@@ -915,9 +926,7 @@ impl ConsoleService {
         // and its proxy settings all arrive that way. What `pathenv` puts on top is the PATH this
         // resolution actually used (so a tool the engine shells out to is found the same way) and
         // the terminal variables a unix pty has no other way to communicate.
-        for (name, value) in pathenv::child_env() {
-            builder.env(name, value);
-        }
+        apply_child_env(&mut builder, pathenv::child_env());
 
         let pair = native_pty_system()
             .openpty(pty_size(cols, rows))
@@ -1395,6 +1404,35 @@ mod tests {
 
     /// The failure the owner is most likely to hit, and it must be a named refusal rather than an
     /// OS error from four layers down.
+    /// Measured 2026-09-23: a Pigeon started from a shell that a Claude Code session spawned
+    /// carries `CLAUDE_CODE_CHILD_SESSION`, and every `claude` it resumed then printed "Transcript
+    /// saving is off" and wrote nothing to `~/.claude` — so the session Pigeon had just resumed
+    /// vanished from the very files Pigeon reads.
+    #[test]
+    fn a_console_child_never_inherits_a_parent_claude_sessions_markers() {
+        let mut builder = CommandBuilder::new("claude");
+        for name in pathenv::INHERITED_SESSION_MARKERS {
+            builder.env(name, "inherited");
+        }
+        // The owner's own Claude configuration is not a marker and must survive.
+        builder.env("CLAUDE_CODE_USE_BEDROCK", "1");
+
+        apply_child_env(&mut builder, pathenv::child_env());
+
+        for name in pathenv::INHERITED_SESSION_MARKERS {
+            assert_eq!(builder.get_env(name), None, "{name} leaked into the child");
+        }
+        assert_eq!(
+            builder.get_env("CLAUDE_CODE_USE_BEDROCK"),
+            Some(OsStr::new("1"))
+        );
+        assert_eq!(
+            builder.get_env("TERM"),
+            Some(OsStr::new("xterm-256color")),
+            "stripping must not cost the overrides"
+        );
+    }
+
     #[test]
     fn an_absent_program_resolves_to_nothing_rather_than_the_bare_name() {
         let dir = scratch_dir("absent");
