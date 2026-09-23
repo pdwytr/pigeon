@@ -29,7 +29,7 @@ default, and one whose engine could not be read shows no status rather than a co
 
 ### Download — no toolchain needed
 
-[**Pigeon 0.2.1 for macOS**](https://github.com/pdwytr/pigeon/releases/download/v0.2.1/Pigeon_0.2.1_aarch64.dmg)
+[**Pigeon 0.3.0 for macOS**](https://github.com/pdwytr/pigeon/releases/download/v0.3.0/Pigeon_0.3.0_aarch64.dmg)
 · Apple silicon.
 
 Open the `.dmg` and drag **Pigeon** into Applications. The first launch needs right-click →
