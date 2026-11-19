@@ -12,9 +12,9 @@ DTOs for presentation, but it must not parse provider output, calculate metrics,
 
 The primary reference screens are:
 
-- [`01-dashboard.html`](../UI/01-dashboard.html): projects-first dashboard, Live/Recent
+- [`01-dashboard.html`](../ui/01-dashboard.html): projects-first dashboard, Live/Recent
   scope, project/session selection, project/session metrics, same-pane terminal.
-- [`02-live-hover.html`](../UI/02-live-hover.html): compact live activity surface with
+- [`02-live-hover.html`](../ui/02-live-hover.html): compact live activity surface with
   bounded scrolling and compact mode.
 
 The component model consumes [`apis.md`](apis.md) and the Rust-side objects in

@@ -16,7 +16,7 @@ and the locking discipline came from there; the two products must agree on every
 
 `docs/contracts/` is the specification — `urds.md`, `frds.md`, `apis.md` (the IPC contract),
 `data.md`, `objects.md`, `components.md`. `docs/decisions/` records the rulings the build forced.
-`docs/UI/` holds the functional mockups the view is measured against.
+`docs/ui/` holds the functional mockups the view is measured against.
 
 ## Invariants — do not break
 

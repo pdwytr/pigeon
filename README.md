@@ -93,7 +93,8 @@ src-tauri/src/
   api/                    Tauri commands, DTOs, events, the typed error vocabulary
 docs/contracts/           the specification this was built from
 docs/decisions/           architecture decision records
-docs/UI/                  the functional mockups
+docs/planning/            working plan and task checklist
+docs/ui/                  the functional mockups
 ```
 
 ## Not in this release
