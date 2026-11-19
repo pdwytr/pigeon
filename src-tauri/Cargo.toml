@@ -2,7 +2,7 @@
 name = "pigeon"
 version = "0.3.2"
 description = "Pigeon — a one-view, multi-engine coding-agent session console."
-authors = ["IntAnalytic"]
+authors = ["Mohammed Khalid Naveed Shaik"]
 edition = "2021"
 
 [lib]
